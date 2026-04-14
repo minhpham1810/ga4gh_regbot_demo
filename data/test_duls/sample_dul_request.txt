@@ -1,0 +1,83 @@
+DATA USE LETTER — SAMPLE RESEARCHER DOCUMENT
+[SAMPLE TEST FILE — for prototyping/evaluation only]
+
+Project Title: Genomic Determinants of Cardiovascular Disease in Diverse Populations
+
+Principal Investigator: Dr. Alice Researcher
+Institution: University of Genomic Sciences, Department of Cardiology
+Date: 2025-09-01
+
+1. Project Overview
+
+We request access to the controlled-access whole-genome sequencing dataset (cohort ID:
+COHORT-0042) to investigate the genetic architecture of cardiovascular disease (CVD)
+in populations of African, South Asian, and East Asian ancestry.
+
+The study aims to identify novel genetic variants associated with coronary artery
+disease, atrial fibrillation, and hypertension using genome-wide association study
+(GWAS) methodology. We expect to enrol approximately 50,000 participants across
+three contributing sites.
+
+2. Data Use and Purpose
+
+2.1 The requested data will be used exclusively for the study of cardiovascular
+disease as defined in Section 1 above. We will not use the data for other disease
+areas without seeking a separate amended access request from the Data Access Committee.
+
+2.2 All analyses will be conducted within the secure computational environment
+provided by our institutional HPC cluster. Data will not be transferred to personal
+devices or external storage media.
+
+2.3 We will not attempt to re-identify any participant.
+
+3. Ethics and Regulatory Approval
+
+3.1 This study has received ethics approval from the Institutional Review Board of
+the University of Genomic Sciences (Protocol No. IRB-2025-CVD-007, approved
+15 August 2025). A copy of the approval letter is attached.
+
+3.2 Approval is current and valid through 31 August 2026, subject to annual renewal.
+
+4. Data Security
+
+4.1 All data will be stored on encrypted servers within our institution's secure
+research computing environment. Access is restricted to named project members listed
+in Appendix A.
+
+4.2 We will maintain access logs and conduct quarterly security reviews.
+
+4.3 In the event of a data breach, we will notify the Data Access Committee and
+the institution's data protection officer within 72 hours.
+
+5. Consent and Participant Protection
+
+5.1 We confirm that the original participants in the source cohort consented to
+broad use of their genomic data for health and medical research.
+
+5.2 We will comply with all conditions of the Data Use Agreement.
+
+6. Cross-Border Data Transfer
+
+We note that one of our three contributing sites is located in Germany. We will
+comply with applicable EU GDPR requirements for international data transfers. Data
+processed in Germany will remain within EU jurisdiction and will not be transferred
+outside the EU without separate legal basis.
+
+7. Publication and Dissemination
+
+7.1 We will publish findings in open-access peer-reviewed journals.
+
+7.2 All publications will acknowledge the contributing cohorts and the Data Access
+Committee in accordance with the acknowledgment guidelines.
+
+7.3 We will submit summary statistics and any novel variants identified to a public
+repository within 12 months of primary publication.
+
+8. Declaration
+
+We confirm that the information provided in this data use letter is accurate and
+complete. We agree to comply with the applicable Data Use Agreement, the GA4GH
+Framework for Responsible Data Sharing, and all applicable laws and regulations.
+
+Signed: Dr. Alice Researcher
+Date: 2025-09-01

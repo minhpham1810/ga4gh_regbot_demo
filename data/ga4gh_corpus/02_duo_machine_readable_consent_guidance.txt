@@ -1,0 +1,130 @@
+GA4GH Machine-Readable Consent Guidance — Data Use Ontology (DUO) Reference
+[SAMPLE SEED FILE — for prototyping only, not an official GA4GH publication]
+
+Overview
+
+The Data Use Ontology (DUO) is a structured vocabulary that enables machine-readable
+encoding of data use conditions, facilitating automated compatibility checking between
+dataset use restrictions and researcher data access requests.
+
+DUO terms are hierarchical and can be combined to express complex use restrictions.
+Each term is identified by a stable identifier in the format DUO:XXXXXXX.
+
+DUO:0000001 — No Restriction (NRES)
+
+Data is available for use under open access conditions, with no restrictions on use.
+This term applies to fully de-identified summary-level datasets published under open
+science principles.
+
+DUO:0000004 — General Research Use (GRU)
+
+Data is available for use in any research project. This term does not restrict the
+disease area, methodology, or population studied. Users must comply with the general
+terms of the applicable Data Use Agreement. Research must remain bona fide and
+scientifically valid.
+
+DUO:0000006 — Health/Medical/Biomedical Research Use (HMB)
+
+Data use is limited to health, medical, or biomedical research. Social science,
+economic, or non-health research uses are excluded. Studies must have a demonstrable
+aim of improving human health outcomes.
+
+DUO:0000007 — Disease Specific Research Use (DS)
+
+Data use is limited to research on a specified disease or group of diseases.
+The disease(s) must be specified in the Data Use Agreement or accompanying
+metadata annotation. Research that extends beyond the specified disease indication
+requires a new or amended access request.
+
+Application guidance:
+- The disease scope must be documented at the dataset level.
+- Users must not expand the disease scope without DAC approval.
+- Combination studies that include the specified disease within a broader cohort
+  analysis may be permissible — consult the DAC.
+
+DUO:0000011 — Population Origins or Ancestry Research Prohibited (POA)
+
+Data may not be used for research into population origins or ancestry. This restriction
+is applied to protect specific communities from potential stigmatisation.
+
+DUO:0000012 — Genetics Studies Only (GSO)
+
+Data use is limited to genetic studies only, including but not limited to GWAS,
+sequencing, and genotyping studies. Non-genetic analyses of associated phenotypic
+data may be permitted as ancillary analyses — consult the DAC.
+
+DUO:0000015 — No General Methods Research (NGMR)
+
+Data may not be used as a reference dataset for the development of general analytical
+methods, such as bioinformatic tool development or algorithm training, unless this is
+the primary stated use of the dataset.
+
+DUO:0000018 — Not For Profit Use Only (NPU)
+
+Data use is limited to not-for-profit organisations. Commercial entities must seek
+a separate license. Collaborations between not-for-profit and commercial partners
+require DAC approval and execution of a separate commercial use agreement.
+
+DUO:0000019 — Publication Required (PUB)
+
+Users are required to publish results arising from use of this data. Publication
+must occur within 24 months of the primary analysis, unless an extension is agreed
+with the DAC. Open-access publication is preferred.
+
+DUO:0000020 — Collaboration Required (COL)
+
+Users must collaborate with the data originator(s) or a designated expert in the
+relevant disease area. The terms of collaboration, including authorship, must be
+agreed before access is granted.
+
+DUO:0000021 — Ethics Approval Required (IRB)
+
+Formal ethics/IRB approval must be obtained and documented before data access begins.
+Users must provide proof of current ethics approval at the time of application and
+must notify the DAC of any changes to ethics approval status.
+
+DUO:0000025 — Time Limit on Use (MOR)
+
+Data use is restricted to a defined time period, specified in the Data Use Agreement.
+Users must destroy or return data at the end of the approved period, unless renewal
+is requested and granted.
+
+DUO:0000026 — User Specific Restriction (US)
+
+Data use is restricted to specific named users. Any change in named users requires
+notification to and approval from the DAC.
+
+DUO:0000027 — Project Specific Restriction (PS)
+
+Data use is restricted to the specific project described in the access application.
+Use for related but distinct projects requires a new application.
+
+DUO:0000028 — Institution Specific Restriction (IS)
+
+Data use is restricted to the named institution(s) specified in the Data Use Agreement.
+Data may not be transferred to third-party institutions without prior DAC approval.
+
+DUO:0000029 — Return to Database or Resource (RTD)
+
+Users are required to submit results, including variants, analysis outputs, or derived
+datasets, back to the original database or resource within a defined timeframe.
+
+DUO:0000042 — General Research Use and Clinical Care (GRU-CC)
+
+Data is available for use in general research and for routine clinical care.
+This term explicitly permits use beyond research contexts, including diagnostic and
+therapeutic applications.
+
+Combining DUO Terms
+
+DUO terms are designed to be combined to create fine-grained use conditions.
+Example combinations:
+  - DUO:0000007 + DUO:0000021 = Disease-specific research requiring ethics approval
+  - DUO:0000006 + DUO:0000018 = Health research, not-for-profit only
+  - DUO:0000004 + DUO:0000019 = General research use with publication required
+
+Compatibility Checking
+
+Automated compatibility checking should determine whether a requested use matches
+all applicable DUO terms. A request is compatible only if it satisfies every
+restriction term applied to the dataset.

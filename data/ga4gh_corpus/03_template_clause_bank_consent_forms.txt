@@ -1,0 +1,125 @@
+GA4GH Consent Clause Bank — Template Clauses for Genomic Research
+[SAMPLE SEED FILE — for prototyping only, not an official GA4GH publication]
+
+Introduction
+
+This clause bank provides model language for use in informed consent forms,
+data use agreements, and participant information sheets for genomic research.
+Clauses are organised by topic area. Institutions should adapt these clauses
+to comply with applicable local law and ethics requirements.
+
+Data Sharing
+
+Template clause (broad consent, open sharing):
+"Your de-identified genetic and health information may be stored in a secure
+database and shared with qualified researchers worldwide for any future health
+and medical research. Your information will not be identified with your name
+or other direct identifiers. Researchers who access your data must agree to
+keep it secure and use it only for health research."
+
+Template clause (controlled access):
+"Your genetic information will only be made available to researchers who apply
+for and receive approval from an independent Data Access Committee. Approved
+researchers must sign a Data Use Agreement that limits how they may use your
+information and requires them to protect its confidentiality."
+
+Template clause (dataset-level DUO annotation):
+"This dataset is annotated with the following Data Use Ontology (DUO) terms:
+DUO:0000007 (Disease Specific Research Use) and DUO:0000021 (Ethics Approval
+Required). Researchers must restrict their use to the specified disease area
+and must provide proof of current ethics board approval."
+
+Protection of Privacy
+
+Template clause (de-identification):
+"Before sharing your information, we will remove or encode your name, address,
+date of birth, and other information that could directly identify you. However,
+because your genetic information is unique to you, we cannot guarantee that
+your identity could never be inferred by someone who combined your genetic data
+with other publicly available information."
+
+Template clause (re-identification risk disclosure):
+"Genomic data carries a small but real risk of re-identification. The research
+team and all approved data recipients must not attempt to re-identify you. If
+a data recipient attempts to re-identify participants, their access will be
+revoked and the matter reported to the relevant authorities."
+
+Template clause (privacy safeguards):
+"Your data will be stored on encrypted servers with access restricted to
+authorised personnel only. Access to your individual-level data is logged and
+audited. In the event of a data breach, you will be notified in accordance with
+applicable law."
+
+Recontact
+
+Template clause (recontact for incidental findings):
+"If researchers discover information that may be important to your health —
+such as a genetic variant linked to a serious treatable condition — you may
+be contacted by the research team. You may indicate below whether you wish
+to be recontacted for this purpose."
+
+Template clause (recontact for additional consent):
+"If researchers wish to use your information for a purpose that is not covered
+by this consent form, they may ask to contact you again to seek your permission.
+You are under no obligation to respond or to agree."
+
+Template clause (no recontact):
+"You will not be individually contacted about the results of research using your
+information. Aggregate results may be published in scientific journals or
+presented at conferences."
+
+Sample Storage
+
+Template clause (long-term sample retention):
+"Your biological sample (blood/saliva) will be stored indefinitely at a secure
+biobank facility. It may be used for future research related to human health
+and disease. You may request destruction of your sample at any time by
+contacting the biobank."
+
+Template clause (limited retention):
+"Your biological sample will be stored for a period of [X] years following the
+completion of this study. After this period, all remaining samples will be
+destroyed unless you provide separate consent for extended storage."
+
+Template clause (secondary use of samples):
+"Any remaining portion of your sample may be used for future research studies,
+subject to ethics approval. If a future study requires access beyond the
+scope of this consent, researchers must either seek a waiver from the ethics
+board or seek your separate consent."
+
+Return of Results
+
+Template clause (individual research results):
+"Research results will not be returned to individual participants as a general
+rule, because results from research studies have not been validated for clinical
+use. However, if a result of clear and significant health importance is
+discovered and could be clinically verified, the research team may contact you
+through your healthcare provider."
+
+Template clause (aggregate results):
+"Aggregate findings from this research will be made publicly available through
+scientific publications, conference presentations, and the study website.
+You will not receive personalised results from your individual data."
+
+Withdrawal
+
+Template clause (right to withdraw):
+"You may withdraw your consent at any time without giving a reason and without
+any negative consequences for your care. To withdraw, please contact [study
+contact]. After withdrawal, no new access to your individual data will be
+permitted. However, data already incorporated into completed analyses cannot
+be recalled."
+
+Governance
+
+Template clause (oversight):
+"Use of your data is overseen by an independent Data Access Committee (DAC)
+that reviews all applications and ensures that data is used only for approved
+purposes. The DAC composition and review criteria are publicly available at
+[URL]."
+
+Template clause (DUO compliance):
+"This study uses the GA4GH Data Use Ontology (DUO) to describe the conditions
+under which your data may be used. Your data is tagged with the DUO term(s)
+noted in the dataset documentation. Approved researchers must comply with all
+applicable DUO restrictions."
