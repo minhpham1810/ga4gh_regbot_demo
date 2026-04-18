@@ -1,130 +1,94 @@
-# ingestion/ingest.py
-"""
-Ingestion orchestration.
-Usage: python -m ingestion.ingest
-       python -m ingestion.ingest --corpus-dir data/ga4gh_corpus
-"""
 import argparse
-import shutil
-import uuid
 from pathlib import Path
-from typing import Optional
 
-import chromadb
-from chromadb.utils import embedding_functions
+from langchain_core.documents import Document
 
-from config import (
-    CHROMA_DIR,
-    CORPUS_CACHE_DIR,
-    CORPUS_COLLECTION,
-    CORPUS_DIR,
-    EMBEDDING_MODEL,
-)
-from ingestion.chunker import chunk_pages
-from ingestion.loaders import load_document
-from ingestion.metadata import DocType
-
-# Heuristic doc_type assignment by filename keywords (checked in order)
-_DOC_TYPE_HINTS: list[tuple[list[str], DocType]] = [
-    (["duo", "machine readable", "machine-readable", "consent guidance"], "guideline"),
-    (["clause", "template", "pediatric", "familial", "clinical", "clause bank"], "template_clause_bank"),
-    (["ethics", "irb", "research ethics"], "ethics_policy"),
-    (["position", "statement"], "position_statement"),
-    (["tool", "reference", "api", "tooling"], "tooling_reference"),
-    (["framework", "policy framework", "lexicon", "sharing", "responsible"], "framework"),
-]
+from config import CHROMA_DIR, CORPUS_COLLECTION, CORPUS_RAW_DIR, MANIFEST_PATH
+from ingestion.chunker import chunk_documents
+from ingestion.loaders import fetch_if_missing
+from ingestion.manifest import SourceConfig, load_manifest
+from ingestion.metadata import base_metadata, enrich
+from ingestion.parsers import parse_duo_owl, parse_pdf
 
 
-def infer_doc_type(path: Path) -> DocType:
-    name_lower = path.stem.lower().replace("-", " ").replace("_", " ")
-    for keywords, doc_type in _DOC_TYPE_HINTS:
-        if any(kw in name_lower for kw in keywords):
-            return doc_type
-    return "framework"
+def _parse_source(raw_path: Path, source: SourceConfig) -> list[Document]:
+    if source.source_kind == "pdf":
+        return parse_pdf(raw_path, source)
+    if source.source_kind == "owl":
+        return parse_duo_owl(raw_path, source)
+    raise ValueError(f"Unsupported source_kind: {source.source_kind}")
 
 
-def get_chroma_collection(
+def ingest_corpus(
+    manifest_path: Path = MANIFEST_PATH,
+    raw_dir: Path = CORPUS_RAW_DIR,
+) -> list[Document]:
+    chunked_documents: list[Document] = []
+    for source in load_manifest(manifest_path):
+        raw_path = fetch_if_missing(source, raw_dir)
+        parsed_docs = _parse_source(raw_path, source)
+        enriched_docs = [enrich(doc, base_metadata(source)) for doc in parsed_docs]
+        chunked_documents.extend(chunk_documents(enriched_docs))
+    return chunked_documents
+
+
+def ingest_corpus_with_report(
+    manifest_path: Path = MANIFEST_PATH,
+    raw_dir: Path = CORPUS_RAW_DIR,
+) -> tuple[list[Document], list[dict]]:
+    chunked_documents: list[Document] = []
+    report: list[dict] = []
+    for source in load_manifest(manifest_path):
+        raw_path = fetch_if_missing(source, raw_dir)
+        parsed_docs = _parse_source(raw_path, source)
+        enriched_docs = [enrich(doc, base_metadata(source)) for doc in parsed_docs]
+        source_chunks = chunk_documents(enriched_docs)
+        chunked_documents.extend(source_chunks)
+        report.append(
+            {
+                "source_id": source.id,
+                "source_kind": source.source_kind,
+                "document_count": len(enriched_docs),
+                "chunk_count": len(source_chunks),
+                "raw_path": raw_path,
+            }
+        )
+    return chunked_documents, report
+
+
+def persist_to_chroma(
+    documents: list[Document],
+    chroma_dir: Path = CHROMA_DIR,
     collection_name: str = CORPUS_COLLECTION,
-    chroma_dir: Optional[str] = None,
-):
-    """Return (or create) a ChromaDB collection with sentence-transformer embeddings."""
-    client = chromadb.PersistentClient(path=str(chroma_dir or CHROMA_DIR))
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=EMBEDDING_MODEL
+) -> None:
+    # TODO: wire up ChromaDB insertion using the existing retriever collection setup.
+    print(
+        f"TODO: persist {len(documents)} documents to Chroma collection "
+        f"'{collection_name}' in '{chroma_dir}'."
     )
-    return client.get_or_create_collection(
-        name=collection_name,
-        embedding_function=ef,
-        metadata={"hnsw:space": "cosine"},
-    )
-
-
-def ingest_file(
-    path: Path,
-    collection,
-    source_url: str = "",
-    drive_file_id: str = "",
-    doc_type: Optional[DocType] = None,
-) -> int:
-    """
-    Ingest a single file into a ChromaDB collection.
-    Returns the number of chunks added.
-    Also copies the source file into the local cache folder.
-    """
-    if doc_type is None:
-        doc_type = infer_doc_type(path)
-
-    title = path.stem.replace("-", " ").replace("_", " ").title()
-    pages = load_document(path)
-    chunks = chunk_pages(
-        pages,
-        doc_type=doc_type,
-        title=title,
-        source_url=source_url,
-        drive_file_id=drive_file_id,
-    )
-
-    if not chunks:
-        return 0
-
-    texts = [c[0] for c in chunks]
-    metadatas = [c[1].to_chroma_dict() for c in chunks]
-    ids = [f"{path.stem}_{uuid.uuid4().hex[:8]}" for _ in chunks]
-
-    collection.add(documents=texts, metadatas=metadatas, ids=ids)
-
-    # Cache source file so the UI PDF viewer can serve it
-    CORPUS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    dest = CORPUS_CACHE_DIR / path.name
-    if not dest.exists():
-        shutil.copy2(path, dest)
-
-    return len(chunks)
-
-
-def ingest_corpus(corpus_dir: Path = CORPUS_DIR) -> int:
-    """
-    Ingest all PDF/TXT files in corpus_dir.
-    Returns total number of chunks ingested.
-    """
-    collection = get_chroma_collection()
-    total = 0
-    supported = {".pdf", ".txt", ".md"}
-    for path in sorted(corpus_dir.glob("*")):
-        if path.suffix.lower() in supported and path.is_file():
-            n = ingest_file(path, collection)
-            print(f"  Ingested {path.name}: {n} chunks")
-            total += n
-    print(f"\nTotal chunks ingested: {total}")
-    return total
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Ingest GA4GH corpus into ChromaDB")
+    parser = argparse.ArgumentParser(description="Fetch and parse the GA4GH corpus.")
     parser.add_argument(
-        "--corpus-dir",
-        default=str(CORPUS_DIR),
-        help="Path to corpus directory (default: data/ga4gh_corpus)",
+        "--manifest-path",
+        default=str(MANIFEST_PATH),
+        help="Path to the corpus manifest YAML.",
+    )
+    parser.add_argument(
+        "--raw-dir",
+        default=str(CORPUS_RAW_DIR),
+        help="Directory for raw source byte caching.",
     )
     args = parser.parse_args()
-    ingest_corpus(Path(args.corpus_dir))
+
+    documents, report = ingest_corpus_with_report(
+        manifest_path=Path(args.manifest_path),
+        raw_dir=Path(args.raw_dir),
+    )
+    for item in report:
+        print(
+            f"[{item['source_id']}] {item['document_count']} documents -> "
+            f"{item['chunk_count']} chunks"
+        )
+    print(f"\nTotal chunks: {len(documents)}")

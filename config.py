@@ -9,7 +9,8 @@ BASE_DIR = Path(__file__).parent
 
 # --- Paths ---
 CORPUS_DIR = BASE_DIR / "data" / "ga4gh_corpus"
-CORPUS_CACHE_DIR = CORPUS_DIR / "cache"
+CORPUS_RAW_DIR = CORPUS_DIR / "raw"
+MANIFEST_PATH = CORPUS_DIR / "manifest.yaml"
 TEST_DUL_DIR = BASE_DIR / "data" / "test_duls"
 CHROMA_DIR = BASE_DIR / "chroma_db"
 
@@ -23,7 +24,7 @@ EMBEDDING_MODEL = os.getenv(
 
 # --- LLM ---
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-LLM_MODEL = os.getenv("LLM_MODEL", "mistral:7b-instruct")
+LLM_MODEL = os.getenv("LLM_MODEL", "llama3.2:1b")
 
 # --- Chunking ---
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1200"))

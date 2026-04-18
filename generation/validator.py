@@ -1,31 +1,39 @@
-# generation/validator.py
 """
-Validates LLM citation output against the set of retrieved anchor_ids.
-Any anchor_id not present in the retrieved set is flagged and set to "unverified".
+Validates LLM citation output against the set of retrieved article_ids.
+Any article_id not present in the retrieved set is flagged and set to "unverified".
 Degrades gracefully on malformed JSON.
 """
 import json
 import re
-from typing import List, Set, Tuple
+from typing import Set
 
-from pydantic import BaseModel, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class VerdictItem(BaseModel):
-    anchor_id: str = ""
-    anchor_type: str = "page_only"
+    model_config = ConfigDict(populate_by_name=True)
+
+    article_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("article_id", "anchor_id"),
+    )
+    article_scheme: str = Field(
+        default="page_only",
+        validation_alias=AliasChoices("article_scheme", "anchor_type"),
+    )
     section_title: str = ""
     obligation: str = ""
     status: str = "unverified"
     evidence: str | None = None
     rationale: str = ""
-    page: int = 1
-    title: str = ""
+    page: int | None = None
+    source_title: str = Field(
+        default="",
+        validation_alias=AliasChoices("source_title", "title"),
+    )
 
 
 def _extract_json_block(raw: str) -> str:
-    """Pull the JSON array from the ## JSON_VERDICTS section."""
-    # Try fenced code block first
     match = re.search(
         r"##\s*JSON_VERDICTS\s*\n+```(?:json)?\s*([\s\S]+?)```",
         raw,
@@ -34,7 +42,6 @@ def _extract_json_block(raw: str) -> str:
     if match:
         return match.group(1).strip()
 
-    # Try bare section (no fences)
     match = re.search(
         r"##\s*JSON_VERDICTS\s*\n+(\[[\s\S]*?\])",
         raw,
@@ -43,7 +50,6 @@ def _extract_json_block(raw: str) -> str:
     if match:
         return match.group(1).strip()
 
-    # Final fallback: first JSON array in the response
     match = re.search(r"(\[[\s\S]*?\])", raw)
     if match:
         return match.group(1).strip()
@@ -52,7 +58,6 @@ def _extract_json_block(raw: str) -> str:
 
 
 def _extract_narrative(raw: str) -> str:
-    """Pull the narrative summary from the ## NARRATIVE_SUMMARY section."""
     match = re.search(
         r"##\s*NARRATIVE_SUMMARY\s*\n+([\s\S]+?)(?:\Z|(?=##\s))",
         raw,
@@ -63,21 +68,34 @@ def _extract_narrative(raw: str) -> str:
     return ""
 
 
+def extract_cited_articles(
+    answer_text: str,
+    retrieved_article_ids: Set[str],
+) -> tuple[list[str], list[str]]:
+    tokens = re.findall(r"\[([^\[\]]+)\]", answer_text)
+    seen: set[str] = set()
+    valid_cited: list[str] = []
+    flagged: list[str] = []
+
+    for token in tokens:
+        token = token.strip()
+        if token in seen:
+            continue
+        seen.add(token)
+        if token in retrieved_article_ids:
+            valid_cited.append(token)
+        else:
+            flagged.append(token)
+    return valid_cited, flagged
+
+
 def validate_verdicts(
     raw_output: str,
-    retrieved_anchor_ids: Set[str],
-) -> Tuple[List[VerdictItem], List[str], str]:
-    """
-    Parse and validate LLM output.
-
-    Returns:
-        verdicts      — list of VerdictItem (anchor_ids not in retrieved set → "unverified")
-        flagged       — list of anchor_ids that were not in the retrieved set
-        narrative     — plain-language narrative summary string
-    """
+    retrieved_article_ids: Set[str],
+) -> tuple[list[VerdictItem], list[str], str]:
     json_str = _extract_json_block(raw_output)
     narrative = _extract_narrative(raw_output)
-    flagged: List[str] = []
+    flagged: list[str] = []
 
     try:
         raw_items = json.loads(json_str)
@@ -86,22 +104,21 @@ def validate_verdicts(
     except (json.JSONDecodeError, ValueError):
         return [], ["<malformed JSON output>"], narrative
 
-    verdicts: List[VerdictItem] = []
+    verdicts: list[VerdictItem] = []
     for item in raw_items:
         if not isinstance(item, dict):
             continue
         try:
-            v = VerdictItem.model_validate(item)
+            verdict = VerdictItem.model_validate(item)
         except Exception:
             continue
 
-        # Cross-check anchor_id against retrieved set
-        if v.anchor_id and v.anchor_id not in retrieved_anchor_ids:
-            v.status = "unverified"
-            v.evidence = None
-            if v.anchor_id not in flagged:
-                flagged.append(v.anchor_id)
+        if verdict.article_id and verdict.article_id not in retrieved_article_ids:
+            verdict.status = "unverified"
+            verdict.evidence = None
+            if verdict.article_id not in flagged:
+                flagged.append(verdict.article_id)
 
-        verdicts.append(v)
+        verdicts.append(verdict)
 
     return verdicts, flagged, narrative

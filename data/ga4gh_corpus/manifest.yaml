@@ -1,0 +1,70 @@
+- id: frs
+  title: Framework for Responsible Sharing of Genomic and Health-Related Data
+  source_kind: pdf
+  url: https://drive.google.com/uc?export=download&id=1x0rXxndUWQCdiBvOBndnNioyDoX_MJoU
+  landing_url: https://www.ga4gh.org/document/framework-for-responsible-sharing-of-genomic-and-health-related-data-sharing-v1/
+  doc_type: framework
+  framework_domain: responsible_sharing
+  article_scheme: frs
+
+- id: duo
+  title: Data Use Ontology
+  source_kind: owl
+  url: https://raw.githubusercontent.com/EBISPOT/DUO/master/src/ontology/duo.owl
+  doc_type: ontology
+  framework_domain: data_use
+  article_scheme: duo
+
+- id: consent_clinical_genomic
+  title: Clinical Genomic Consent Clauses
+  source_kind: pdf
+  url: https://drive.google.com/uc?export=download&id=188pBO9vIBVXmEsLhdVCdKMUNPtGB_3H-
+  landing_url: https://www.ga4gh.org/document/clinical-genomic-consent-clauses/
+  doc_type: consent_toolkit
+  framework_domain: consent
+  article_scheme: consent_clause
+
+- id: consent_genomic_research
+  title: Consent Clauses for Genomic Research
+  source_kind: pdf
+  url: https://drive.google.com/uc?export=download&id=10j6og59Vd575EDj9EpIXo08S6-Md5i1_
+  landing_url: https://www.ga4gh.org/document/consent-clauses-for-genomic-research/
+  doc_type: consent_toolkit
+  framework_domain: consent
+  article_scheme: consent_clause
+
+- id: consent_large_scale
+  title: Large Scale Initiatives Consent Clauses
+  source_kind: pdf
+  url: https://drive.google.com/uc?export=download&id=1EqJ6FbxVlYXhUX8M7THNQLmcwFnBUvMb
+  landing_url: https://www.ga4gh.org/document/large-scale-initiatives-consent-clauses/
+  doc_type: consent_toolkit
+  framework_domain: consent
+  article_scheme: consent_clause
+
+- id: consent_rare_disease
+  title: Model Consent Clauses for Rare Disease Research
+  source_kind: pdf
+  url: https://drive.google.com/uc?export=download&id=1yf4SvAByW4rmM33un7FFPVEoVWr8jM7l
+  landing_url: https://www.ga4gh.org/document/model-consent-clauses-for-rare-disease-research/
+  doc_type: consent_toolkit
+  framework_domain: consent
+  article_scheme: consent_clause
+
+- id: consent_familial
+  title: Familial Consent Clauses
+  source_kind: pdf
+  url: https://drive.google.com/uc?export=download&id=1csxQAqJ5jytpV4QZvLr-M4oIPqQv3TNY
+  landing_url: https://www.ga4gh.org/document/familial-consent-clauses/
+  doc_type: consent_toolkit
+  framework_domain: consent
+  article_scheme: consent_clause
+
+- id: consent_pediatric
+  title: Pediatric Consent to Genetic Research Clauses
+  source_kind: pdf
+  url: https://drive.google.com/uc?export=download&id=19dgh_0VWUqHbdHvmE_Y_ugXjxumDH_zQ
+  landing_url: https://www.ga4gh.org/document/pediatric-consent-to-genetic-research-clauses/
+  doc_type: consent_toolkit
+  framework_domain: consent
+  article_scheme: consent_clause

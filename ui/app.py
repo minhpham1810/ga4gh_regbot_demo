@@ -1,45 +1,31 @@
-# ui/app.py
 """
-GA4GH RegBot — Chat-first Streamlit UI.
+GA4GH RegBot - Chat-first Streamlit UI.
 Run with: streamlit run ui/app.py
 """
 import sys
-from pathlib import Path
-
-# Allow imports from project root
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 import tempfile
+from pathlib import Path
 from typing import Optional
 
+import fitz
 import streamlit as st
 
-from config import CORPUS_DIR, CHROMA_DIR, CORPUS_COLLECTION
-from generation.pipeline import run_pipeline, PipelineResult
-from generation.validator import VerdictItem
-from ui.pdf_viewer import get_cached_pdf_path, render_pdf_viewer
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# ─── Page config ────────────────────────────────────────────────────────────
+from generation.pipeline import PipelineResult, run_pipeline
+from generation.validator import VerdictItem
+from ui.pdf_viewer import get_cached_source_path, render_viewer
 
 st.set_page_config(
     page_title="GA4GH RegBot",
-    page_icon="🧬",
     layout="wide",
-    initial_sidebar_state="collapsed",
 )
-
-# ─── Custom CSS ─────────────────────────────────────────────────────────────
 
 st.markdown(
     """
     <style>
-    /* Main container spacing */
-    .block-container { padding-top: 1.5rem; padding-bottom: 0; max-width: 900px; }
-
-    /* Chat bubbles */
+    .block-container { padding-top: 1.5rem; padding-bottom: 0; max-width: 1400px; }
     [data-testid="stChatMessage"] { border-radius: 12px; margin-bottom: 0.5rem; }
-
-    /* Status badge colours */
     .badge-covered     { background:#d4edda; color:#155724; padding:2px 8px;
                          border-radius:4px; font-size:0.78rem; font-weight:600; }
     .badge-partial     { background:#fff3cd; color:#856404; padding:2px 8px;
@@ -48,32 +34,24 @@ st.markdown(
                          border-radius:4px; font-size:0.78rem; font-weight:600; }
     .badge-unverified  { background:#e2e3e5; color:#383d41; padding:2px 8px;
                          border-radius:4px; font-size:0.78rem; font-weight:600; }
-
-    /* Source preview panel */
-    .source-panel { background:#f8f9fa; border-radius:10px; padding:1rem; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ─── Session state initialisation ───────────────────────────────────────────
 
-def _init_state():
+def _init_state() -> None:
     defaults = {
-        "messages": [],          # list of {"role": "user"|"assistant", "content": ..., "meta": ...}
-        "uploaded_doc_text": "", # full text of current uploaded document
-        "uploaded_doc_name": "", # filename
-        "last_result": None,     # PipelineResult from last analysis
-        "source_preview": None,  # {"title", "page", "anchor_id", "drive_file_id"}
-        "corpus_ingested": None, # True/False/None (unknown)
+        "messages": [],
+        "uploaded_doc_text": "",
+        "uploaded_doc_name": "",
+        "last_result": None,
+        "source_preview": None,
     }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
-_init_state()
-
-# ─── Helpers ────────────────────────────────────────────────────────────────
 
 def _status_badge(status: str) -> str:
     css_class = {
@@ -85,381 +63,344 @@ def _status_badge(status: str) -> str:
     return f'<span class="{css_class}">{status}</span>'
 
 
-def _corpus_is_ingested() -> bool:
-    """Quick check — does the ChromaDB collection have any documents?"""
-    try:
-        import chromadb
-        from chromadb.utils import embedding_functions
-        from config import EMBEDDING_MODEL
-
-        client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-        ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=EMBEDDING_MODEL
-        )
-        col = client.get_or_create_collection(
-            CORPUS_COLLECTION, embedding_function=ef,
-            metadata={"hnsw:space": "cosine"},
-        )
-        return col.count() > 0
-    except Exception:
-        return False
-
-
-def _ingest_corpus():
-    """Run corpus ingestion and cache the result."""
-    from ingestion.ingest import ingest_corpus
-    with st.spinner("Ingesting GA4GH corpus into ChromaDB…"):
-        total = ingest_corpus(CORPUS_DIR)
-    st.session_state.corpus_ingested = total > 0
-    return total
-
-
 def _format_domains(domains: list[str]) -> str:
     labels = {
         "consent": "Consent",
         "data_access": "Data Access",
         "cross_border": "Cross-Border",
-        "privacy_security": "Privacy & Security",
+        "privacy_security": "Privacy and Security",
         "general": "General",
     }
-    return " · ".join(labels.get(d, d) for d in domains)
+    return " | ".join(labels.get(domain, domain) for domain in domains)
 
 
 def _verdict_summary_text(verdicts: list[VerdictItem]) -> str:
     if not verdicts:
-        return "No structured verdicts were produced."
+        return ""
     counts = {"covered": 0, "partially covered": 0, "missing": 0, "unverified": 0}
-    for v in verdicts:
-        key = v.status.lower()
-        if key in counts:
-            counts[key] += 1
-        else:
-            counts["unverified"] += 1
-    parts = []
+    for verdict in verdicts:
+        counts[verdict.status.lower()] = counts.get(verdict.status.lower(), 0) + 1
+
+    parts: list[str] = []
     if counts["covered"]:
-        parts.append(f"✅ {counts['covered']} covered")
+        parts.append(f"{counts['covered']} covered")
     if counts["partially covered"]:
-        parts.append(f"⚠️ {counts['partially covered']} partially covered")
+        parts.append(f"{counts['partially covered']} partial")
     if counts["missing"]:
-        parts.append(f"❌ {counts['missing']} missing")
+        parts.append(f"{counts['missing']} missing")
     if counts["unverified"]:
-        parts.append(f"🔘 {counts['unverified']} unverified")
-    return "  |  ".join(parts)
+        parts.append(f"{counts['unverified']} unverified")
+    return " | ".join(parts)
 
 
-# ─── Sidebar ────────────────────────────────────────────────────────────────
+def _get_history() -> list[dict]:
+    history: list[dict] = []
+    for msg in st.session_state.messages[-12:]:
+        role = msg["role"]
+        content = msg.get("content", "")
+        if role == "user" and "\n\n*(Document:" in content:
+            content = content.split("\n\n*(Document:")[0]
+        history.append({"role": role, "content": content})
+    return history
 
-with st.sidebar:
-    st.markdown("### 🧬 GA4GH RegBot")
-    st.caption("Local-first compliance assistant")
-    st.divider()
 
-    # Corpus status
-    if st.session_state.corpus_ingested is None:
-        st.session_state.corpus_ingested = _corpus_is_ingested()
+def _push_message(prompt: str) -> None:
+    user_content = prompt
+    if st.session_state.uploaded_doc_name:
+        user_content += f"\n\n*(Document: {st.session_state.uploaded_doc_name})*"
+    st.session_state.messages.append({"role": "user", "content": user_content, "meta": {}})
+    with st.spinner("Analysing..."):
+        result = run_pipeline(
+            researcher_text=st.session_state.uploaded_doc_text,
+            follow_up=prompt,
+            conversation_history=_get_history(),
+        )
 
-    if st.session_state.corpus_ingested:
-        st.success("Corpus ready", icon="✅")
-    else:
-        st.warning("Corpus not ingested", icon="⚠️")
+    reply = result.answer or result.narrative or ""
 
-    if st.button("Ingest sample corpus", use_container_width=True):
-        total = _ingest_corpus()
-        if total > 0:
-            st.success(f"Ingested {total} chunks")
-        else:
-            st.error("No files found in corpus directory.")
+    st.session_state.last_result = result
+    st.session_state.messages.append(
+        {"role": "assistant", "content": reply, "meta": {"result": result}}
+    )
 
-    st.divider()
-    st.markdown("**Corpus directory**")
-    st.code(str(CORPUS_DIR), language=None)
 
-    st.divider()
+def _page_label(page: int | None) -> str:
+    return f"p.{page}" if page is not None else "no page"
 
-    # Source preview panel
-    if st.session_state.source_preview:
-        sp = st.session_state.source_preview
-        st.markdown("#### 📄 Source Preview")
-        st.markdown(f"**{sp['title']}**")
-        st.markdown(f"Anchor: `{sp['anchor_id']}`  |  Page: **{sp['page']}**")
 
-        pdf_path = get_cached_pdf_path(sp.get("drive_file_id", ""), sp["title"])
-        if pdf_path:
-            render_pdf_viewer(pdf_path, page=sp["page"])
-        else:
-            st.info("Source file not found in local cache.")
+def _unique_cited_chunks(chunks: list) -> list:
+    unique_chunks: list = []
+    seen: set[tuple[str, str, int | None]] = set()
 
-        if sp.get("source_url"):
-            st.markdown(f"[Open original source]({sp['source_url']})")
+    for chunk in chunks:
+        key = (chunk.source_id, chunk.article_id, chunk.page)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_chunks.append(chunk)
 
-        if st.button("Close preview", use_container_width=True):
+    return unique_chunks
+
+
+def _set_source_preview(preview: dict) -> None:
+    st.session_state.source_preview = preview
+
+
+def _source_preview_from_chunk(chunk) -> dict:
+    return {
+        "source_title": chunk.source_title,
+        "page": chunk.page,
+        "article_id": chunk.article_id,
+        "source_id": chunk.source_id,
+        "source_url": chunk.source_url,
+    }
+
+
+def _source_preview_from_verdict(verdict: VerdictItem, result: PipelineResult) -> dict:
+    preview = {
+        "source_title": verdict.source_title,
+        "page": verdict.page,
+        "article_id": verdict.article_id,
+        "source_id": "",
+        "source_url": "",
+    }
+    for chunk in result.retrieved_chunks:
+        if chunk.article_id == verdict.article_id:
+            preview["source_url"] = chunk.source_url
+            preview["source_id"] = chunk.source_id
+            if preview["page"] is None:
+                preview["page"] = chunk.page
+            if not preview["source_title"]:
+                preview["source_title"] = chunk.source_title
+            break
+    return preview
+
+
+def _render_source_preview_panel() -> None:
+    sp = st.session_state.source_preview
+    source_title = sp.get("source_title", "")
+    article_id = sp.get("article_id", "")
+    page = sp.get("page")
+
+    header_col, close_col = st.columns([5, 1])
+    with header_col:
+        st.markdown("### Source Preview")
+    with close_col:
+        if st.button("Close", key="close_source_preview", use_container_width=True):
             st.session_state.source_preview = None
             st.rerun()
 
-# ─── Main chat area ─────────────────────────────────────────────────────────
-
-st.markdown("## 🧬 GA4GH RegBot")
-st.caption(
-    "Upload a data use letter, consent form, or related document "
-    "to get a compliance gap analysis grounded in GA4GH standards."
-)
-
-# File uploader (above chat input, below title)
-uploaded_file = st.file_uploader(
-    "Upload researcher document (PDF or TXT)",
-    type=["pdf", "txt"],
-    label_visibility="collapsed",
-    key="file_uploader",
-)
-
-if uploaded_file is not None:
-    # Parse and store uploaded document
-    import fitz
-
-    suffix = Path(uploaded_file.name).suffix.lower()
-    if suffix == ".pdf":
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(uploaded_file.getvalue())
-            tmp_path = Path(tmp.name)
-        doc = fitz.open(str(tmp_path))
-        doc_text = "\n\n".join(
-            page.get_text("text") for page in doc if page.get_text("text").strip()
-        )
-        doc.close()
-        tmp_path.unlink(missing_ok=True)
+    st.markdown(f"**{source_title}**")
+    if page is not None:
+        st.markdown(f"Article: `{article_id}`  |  Page: **{page}**")
     else:
-        doc_text = uploaded_file.getvalue().decode("utf-8", errors="replace")
+        st.markdown(f"Article: `{article_id}`")
 
-    if doc_text != st.session_state.uploaded_doc_text:
-        st.session_state.uploaded_doc_text = doc_text
-        st.session_state.uploaded_doc_name = uploaded_file.name
-        # Add a system-style user message to chat
-        st.session_state.messages.append({
-            "role": "user",
-            "content": f"I've uploaded **{uploaded_file.name}** for compliance review.",
-            "meta": {"file": uploaded_file.name},
-        })
+    source_path = get_cached_source_path(sp.get("source_id", ""))
+    if source_path:
+        render_viewer(source_path, page=page)
+    else:
+        st.info("Source file not found in local raw cache.")
 
-# ─── Render chat history ─────────────────────────────────────────────────────
+    if sp.get("source_url"):
+        st.markdown(f"[Open original source]({sp['source_url']})")
 
-for msg in st.session_state.messages:
-    role = msg["role"]
-    with st.chat_message(role, avatar="🧬" if role == "assistant" else None):
-        # User messages
-        if role == "user":
-            st.markdown(msg["content"])
 
-        # Assistant messages
-        elif role == "assistant":
-            content = msg.get("content", "")
-            result: Optional[PipelineResult] = msg.get("meta", {}).get("result")
+def _render_corpus_qa(result: PipelineResult, live: bool = False) -> str:
+    reply = result.answer or result.narrative or "No answer was produced."
+    st.markdown(reply)
 
-            st.markdown(content)
-
-            if result and not result.off_topic:
-                # Compact verdict summary line
-                if result.verdicts or result.domains:
-                    cols = st.columns([3, 2])
-                    with cols[0]:
-                        st.caption(f"Domains: {_format_domains(result.domains)}")
-                    with cols[1]:
-                        st.caption(_verdict_summary_text(result.verdicts))
-
-                # Narrative
-                if result.narrative:
-                    with st.expander("📝 Detailed analysis", expanded=False):
-                        st.markdown(result.narrative)
-
-                # Evidence / citations
-                if result.verdicts:
-                    with st.expander(
-                        f"🔍 Evidence & citations ({len(result.verdicts)} items)",
-                        expanded=False,
+    if result.cited_chunks:
+        display_chunks = _unique_cited_chunks(result.cited_chunks)
+        with st.expander(f"Sources ({len(display_chunks)})", expanded=live):
+            if result.flagged_articles:
+                st.warning(
+                    f"Unverified citation(s): `{'`, `'.join(result.flagged_articles)}`"
+                )
+            for index, chunk in enumerate(display_chunks):
+                label = chunk.section_title or chunk.article_id
+                st.markdown(
+                    f"**{label}** - `{chunk.article_id}` | {_page_label(chunk.page)} | "
+                    f"*{chunk.source_title}*"
+                )
+                columns = st.columns([5, 1])
+                with columns[1]:
+                    if st.button(
+                        "View Source",
+                        key=(
+                            f"qa_src_{index}_{chunk.source_id}_{chunk.article_id}_"
+                            f"{chunk.page}_{id(result)}"
+                        ),
+                        use_container_width=True,
                     ):
-                        if result.flagged_anchors:
-                            st.warning(
-                                f"⚠️ {len(result.flagged_anchors)} citation(s) could not be "
-                                f"verified against retrieved sources: "
-                                f"`{'`, `'.join(result.flagged_anchors)}`"
-                            )
+                        _set_source_preview(_source_preview_from_chunk(chunk))
+                st.divider()
+    return reply
 
-                        for v in result.verdicts:
-                            badge_html = _status_badge(v.status)
-                            st.markdown(
-                                f"{badge_html} &nbsp; **{v.section_title or v.anchor_id}** "
-                                f"— `{v.anchor_id}`",
-                                unsafe_allow_html=True,
-                            )
-                            if v.obligation:
-                                st.markdown(f"*Obligation:* {v.obligation}")
-                            if v.evidence:
-                                st.markdown(
-                                    f"> {v.evidence[:300]}{'…' if len(v.evidence) > 300 else ''}"
-                                )
-                            if v.rationale:
-                                st.caption(v.rationale)
 
-                            source_cols = st.columns([4, 1])
-                            with source_cols[1]:
-                                if st.button(
-                                    "View Source",
-                                    key=f"src_{v.anchor_id}_{id(msg)}",
-                                    use_container_width=True,
-                                ):
-                                    st.session_state.source_preview = {
-                                        "title": v.title,
-                                        "page": v.page,
-                                        "anchor_id": v.anchor_id,
-                                        "drive_file_id": "",
-                                        "source_url": "",
-                                    }
-                                    # Find source_url from retrieved chunks
-                                    if result.retrieved_chunks:
-                                        for chunk in result.retrieved_chunks:
-                                            if chunk.anchor_id == v.anchor_id:
-                                                st.session_state.source_preview["source_url"] = chunk.source_url
-                                                st.session_state.source_preview["drive_file_id"] = chunk.drive_file_id
-                                                break
-                                    st.rerun()
-                            st.divider()
-
-# ─── Chat input ──────────────────────────────────────────────────────────────
-
-chat_placeholder = (
-    "Ask a compliance question, or type 'analyze' after uploading a document…"
-    if st.session_state.uploaded_doc_name
-    else "Upload a document above, then ask your compliance question…"
-)
-
-if prompt := st.chat_input(chat_placeholder):
-    # Show user message
-    user_msg = {"role": "user", "content": prompt, "meta": {}}
-    if st.session_state.uploaded_doc_name:
-        user_msg["content"] = (
-            f"{prompt}\n\n*(Document: {st.session_state.uploaded_doc_name})*"
-        )
-    st.session_state.messages.append(user_msg)
-
-    with st.chat_message("user"):
-        st.markdown(user_msg["content"])
-
-    # Run analysis
-    with st.chat_message("assistant", avatar="🧬"):
-        with st.spinner("Analysing…"):
-            result = run_pipeline(
-                researcher_text=st.session_state.uploaded_doc_text,
-                follow_up=prompt,
-            )
-
-        # Build a conversational opening paragraph
-        if result.off_topic:
-            reply = result.narrative
-        elif result.error:
-            reply = f"Something went wrong during analysis:\n\n> {result.error}"
-        elif not result.retrieved_chunks:
-            reply = (
-                "I couldn't find any relevant GA4GH policy passages. "
-                "Please make sure the corpus has been ingested using the sidebar button."
-            )
-        else:
-            n_issues = sum(
-                1 for v in result.verdicts
-                if v.status.lower() in ("missing", "partially covered")
-            )
-            n_covered = sum(
-                1 for v in result.verdicts if v.status.lower() == "covered"
-            )
-            domains_str = _format_domains(result.domains)
-
-            if result.verdicts:
-                reply = (
-                    f"I've analysed the document against the GA4GH corpus "
-                    f"across the **{domains_str}** domain(s).\n\n"
-                    f"Out of **{len(result.verdicts)}** obligations checked: "
-                    f"**{n_covered}** are covered, "
-                    f"**{n_issues}** need attention (missing or partially covered)."
-                )
-                if result.flagged_anchors:
-                    reply += (
-                        f"\n\n⚠️ **{len(result.flagged_anchors)}** citation(s) could not "
-                        f"be verified against the retrieved evidence and have been marked "
-                        f"as *unverified*."
-                    )
-            else:
-                reply = (
-                    f"I analysed the document in the **{domains_str}** domain(s), "
-                    "but the model did not produce structured verdicts. "
-                    "See the narrative summary below for details."
-                )
-
+def _render_document_review(result: PipelineResult, live: bool = False) -> str:
+    if result.error:
+        reply = f"Something went wrong:\n\n> {result.error}"
         st.markdown(reply)
+        return reply
 
-        if result and not result.off_topic:
-            if result.domains:
-                cols = st.columns([3, 2])
-                with cols[0]:
-                    st.caption(f"Domains: {_format_domains(result.domains)}")
-                with cols[1]:
-                    st.caption(_verdict_summary_text(result.verdicts))
+    n_issues = sum(
+        1 for verdict in result.verdicts if verdict.status.lower() in {"missing", "partially covered"}
+    )
+    n_covered = sum(1 for verdict in result.verdicts if verdict.status.lower() == "covered")
+    domains_str = _format_domains(result.domains)
 
-            if result.narrative:
-                with st.expander("📝 Detailed analysis", expanded=False):
-                    st.markdown(result.narrative)
+    if result.verdicts:
+        reply = (
+            "I've analysed the document against the GA4GH corpus "
+            f"across the **{domains_str}** domain(s).\n\n"
+            f"Out of **{len(result.verdicts)}** obligations checked: "
+            f"**{n_covered}** covered, **{n_issues}** need attention."
+        )
+        if result.flagged_articles:
+            reply += (
+                f"\n\n**{len(result.flagged_articles)}** citation(s) could not be verified "
+                "and were marked as *unverified*."
+            )
+    else:
+        reply = (
+            f"I analysed the document in the **{domains_str}** domain(s), "
+            "but no structured verdicts were produced. See the narrative below."
+        )
 
-            if result.verdicts:
-                with st.expander(
-                    f"🔍 Evidence & citations ({len(result.verdicts)} items)",
-                    expanded=True,
-                ):
-                    if result.flagged_anchors:
-                        st.warning(
-                            f"⚠️ Unverified citations: "
-                            f"`{'`, `'.join(result.flagged_anchors)}`"
-                        )
+    st.markdown(reply)
 
-                    for v in result.verdicts:
-                        badge_html = _status_badge(v.status)
-                        st.markdown(
-                            f"{badge_html} &nbsp; **{v.section_title or v.anchor_id}** "
-                            f"— `{v.anchor_id}`",
-                            unsafe_allow_html=True,
-                        )
-                        if v.obligation:
-                            st.markdown(f"*Obligation:* {v.obligation}")
-                        if v.evidence:
-                            st.markdown(
-                                f"> {v.evidence[:300]}{'…' if len(v.evidence) > 300 else ''}"
-                            )
-                        if v.rationale:
-                            st.caption(v.rationale)
+    if result.domains:
+        columns = st.columns([3, 2])
+        with columns[0]:
+            st.caption(f"Domains: {_format_domains(result.domains)}")
+        with columns[1]:
+            st.caption(_verdict_summary_text(result.verdicts))
 
-                        s_cols = st.columns([4, 1])
-                        with s_cols[1]:
-                            if st.button(
-                                "View Source",
-                                key=f"src_new_{v.anchor_id}_{id(result)}",
-                                use_container_width=True,
-                            ):
-                                st.session_state.source_preview = {
-                                    "title": v.title,
-                                    "page": v.page,
-                                    "anchor_id": v.anchor_id,
-                                    "drive_file_id": "",
-                                    "source_url": "",
-                                }
-                                for chunk in result.retrieved_chunks:
-                                    if chunk.anchor_id == v.anchor_id:
-                                        st.session_state.source_preview["source_url"] = chunk.source_url
-                                        st.session_state.source_preview["drive_file_id"] = chunk.drive_file_id
-                                        break
-                                st.rerun()
-                        st.divider()
+    if result.narrative:
+        with st.expander("Detailed analysis", expanded=False):
+            st.markdown(result.narrative)
 
-        st.session_state.last_result = result
+    if result.verdicts:
+        with st.expander(f"Evidence and citations ({len(result.verdicts)} items)", expanded=live):
+            if result.flagged_articles:
+                st.warning(f"Unverified: `{'`, `'.join(result.flagged_articles)}`")
+            for index, verdict in enumerate(result.verdicts):
+                badge_html = _status_badge(verdict.status)
+                st.markdown(
+                    f"{badge_html} &nbsp; **{verdict.section_title or verdict.article_id}** "
+                    f"- `{verdict.article_id}`",
+                    unsafe_allow_html=True,
+                )
+                if verdict.obligation:
+                    st.markdown(f"*Obligation:* {verdict.obligation}")
+                if verdict.evidence:
+                    clipped = verdict.evidence[:300]
+                    suffix = "..." if len(verdict.evidence) > 300 else ""
+                    st.markdown(f"> {clipped}{suffix}")
+                if verdict.rationale:
+                    st.caption(verdict.rationale)
+                columns = st.columns([4, 1])
+                with columns[1]:
+                    if st.button(
+                        "View Source",
+                        key=f"dr_src_{index}_{verdict.article_id}_{verdict.page}_{id(result)}",
+                        use_container_width=True,
+                    ):
+                        _set_source_preview(_source_preview_from_verdict(verdict, result))
+                st.divider()
 
-    # Save assistant message to history
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": reply,
-        "meta": {"result": result},
-    })
+    return reply
+
+
+def _render_result(result: PipelineResult, live: bool = False) -> str:
+    if result.off_topic:
+        reply = result.answer or result.narrative
+        st.markdown(reply)
+        return reply
+    if not result.retrieved_chunks and not result.answer:
+        reply = (
+            "I couldn't find any relevant GA4GH policy passages. "
+            "Please index the corpus first."
+        )
+        st.markdown(reply)
+        return reply
+    if result.chat_mode == "corpus_qa":
+        return _render_corpus_qa(result, live=live)
+    return _render_document_review(result, live=live)
+
+
+_init_state()
+
+has_preview = st.session_state.source_preview is not None
+if has_preview:
+    chat_col, preview_col = st.columns([2, 1.1], gap="large")
+else:
+    chat_col = st.container()
+    preview_col = None
+
+with chat_col:
+    st.markdown("## GA4GH RegBot")
+    st.caption("Ask about GA4GH standards, or upload a document for a compliance gap analysis.")
+
+    uploaded_file = st.file_uploader(
+        "Upload researcher document (PDF or TXT)",
+        type=["pdf", "txt"],
+        label_visibility="collapsed",
+        key="file_uploader",
+    )
+
+    if uploaded_file is not None:
+        suffix = Path(uploaded_file.name).suffix.lower()
+        if suffix == ".pdf":
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(uploaded_file.getvalue())
+                tmp_path = Path(tmp.name)
+            pdf = fitz.open(str(tmp_path))
+            try:
+                doc_text = "\n\n".join(
+                    page.get_text("text").strip()
+                    for page in pdf
+                    if page.get_text("text").strip()
+                )
+            finally:
+                pdf.close()
+                tmp_path.unlink(missing_ok=True)
+        else:
+            doc_text = uploaded_file.getvalue().decode("utf-8", errors="replace")
+
+        if doc_text != st.session_state.uploaded_doc_text:
+            st.session_state.uploaded_doc_text = doc_text
+            st.session_state.uploaded_doc_name = uploaded_file.name
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": (
+                        f"I've loaded **{uploaded_file.name}**. I can analyze it for consent, "
+                        "data-sharing, privacy/security, or cross-border transfer issues. "
+                        "Try asking *'What are the biggest gaps?'* or "
+                        "*'Does this address secondary use?'*"
+                    ),
+                    "meta": {},
+                }
+            )
+
+    for msg in st.session_state.messages:
+        role = msg["role"]
+        with st.chat_message(role):
+            if role == "user":
+                st.markdown(msg["content"])
+            else:
+                result: Optional[PipelineResult] = msg.get("meta", {}).get("result")
+                if result:
+                    _render_result(result, live=False)
+                else:
+                    st.markdown(msg.get("content", ""))
+    if prompt := st.chat_input("Ask about GA4GH guidance, or upload a document for review..."):
+        _push_message(prompt)
+        st.rerun()
+
+if preview_col is not None:
+    with preview_col:
+        with st.container(border=True):
+            _render_source_preview_panel()

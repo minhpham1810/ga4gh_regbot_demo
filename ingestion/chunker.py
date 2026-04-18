@@ -1,65 +1,122 @@
-# ingestion/chunker.py
-"""
-Page-aware chunking.
-Splits within a page; never crosses page boundaries.
-Returns list of (chunk_text, ChunkMetadata).
-"""
-from typing import List, Tuple
+import re
+from dataclasses import dataclass
 
-from ingestion.loaders import PageChunk
-from ingestion.metadata import ChunkMetadata, DocType
-from ingestion.anchors import extract_anchor
-from config import CHUNK_SIZE, CHUNK_OVERLAP
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from slugify import slugify
 
+from config import CHUNK_OVERLAP, CHUNK_SIZE
+from ingestion.metadata import enrich
 
-def _split_text(text: str, size: int, overlap: int) -> List[str]:
-    """Character-level sliding-window split."""
-    if len(text) <= size:
-        return [text]
-    chunks: List[str] = []
-    start = 0
-    while start < len(text):
-        end = min(start + size, len(text))
-        chunks.append(text[start:end])
-        if end == len(text):
-            break
-        start += size - overlap
-    return chunks
+_FRS_NUMBERED_RE = re.compile(
+    r"(?im)^\s*(?:section|article)\s+(\d+(?:\.\d+)*)\b(?:[:.\-\s]+(.{1,120}))?"
+)
+_FRS_INLINE_RE = re.compile(r"(?im)^\s*(\d+(?:\.\d+)*)[.\s:-]+(.{1,120})$")
+_HEADING_RE = re.compile(r"^[A-Z][A-Za-z0-9,()'\"/&:;\- ]{2,120}$")
 
 
-def chunk_pages(
-    pages: List[PageChunk],
-    doc_type: DocType,
-    title: str,
-    source_url: str = "",
-    drive_file_id: str = "",
-    chunk_size: int = CHUNK_SIZE,
-    chunk_overlap: int = CHUNK_OVERLAP,
-) -> List[Tuple[str, ChunkMetadata]]:
-    """
-    Given (text, page_num) pairs, produce (chunk_text, ChunkMetadata) pairs.
-    Chunking stays within a single page to preserve page provenance.
-    """
-    result: List[Tuple[str, ChunkMetadata]] = []
+@dataclass
+class ArticleMatch:
+    article_id: str
+    section_title: str = ""
 
-    for page_text, page_num in pages:
-        sub_chunks = _split_text(page_text, chunk_size, chunk_overlap)
-        for chunk_text in sub_chunks:
-            if not chunk_text.strip():
+
+def extract_frs_section_id(text: str) -> ArticleMatch | None:
+    match = _FRS_NUMBERED_RE.search(text)
+    if match:
+        return ArticleMatch(
+            article_id=match.group(1).strip(),
+            section_title=(match.group(2) or "").strip(),
+        )
+
+    match = _FRS_INLINE_RE.search(text)
+    if match:
+        return ArticleMatch(
+            article_id=match.group(1).strip(),
+            section_title=(match.group(2) or "").strip(),
+        )
+
+    return None
+
+
+def extract_consent_clause_id(text: str) -> ArticleMatch | None:
+    candidate_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in candidate_lines[:12]:
+        if len(line) > 140:
+            continue
+        if line.endswith("."):
+            continue
+        if line.lower().startswith("page "):
+            continue
+        if _HEADING_RE.match(line):
+            return ArticleMatch(article_id=slugify(line), section_title=line)
+    return None
+
+
+def _fallback_article_id(doc: Document) -> str:
+    source_id = doc.metadata.get("source_id", "source")
+    page = doc.metadata.get("page")
+    if page is not None:
+        return f"{source_id}:p{page}"
+    return source_id
+
+
+def _base_article_metadata(doc: Document) -> dict:
+    scheme = doc.metadata.get("article_scheme", "page_only")
+    if scheme == "duo":
+        return {
+            "article_id": doc.metadata.get("article_id", ""),
+            "article_scheme": "duo",
+            "section_title": doc.metadata.get("section_title", ""),
+        }
+
+    if scheme == "frs":
+        match = extract_frs_section_id(doc.page_content)
+        if match:
+            return {
+                "article_id": match.article_id,
+                "article_scheme": "frs",
+                "section_title": doc.metadata.get("section_title") or match.section_title,
+            }
+
+    if scheme == "consent_clause":
+        match = extract_consent_clause_id(doc.page_content)
+        if match:
+            return {
+                "article_id": match.article_id,
+                "article_scheme": "consent_clause",
+                "section_title": doc.metadata.get("section_title") or match.section_title,
+            }
+
+    return {
+        "article_id": _fallback_article_id(doc),
+        "article_scheme": "page_only",
+        "section_title": doc.metadata.get("section_title", ""),
+    }
+
+
+def chunk_documents(
+    docs: list[Document],
+    size: int = CHUNK_SIZE,
+    overlap: int = CHUNK_OVERLAP,
+) -> list[Document]:
+    splitter = RecursiveCharacterTextSplitter(chunk_size=size, chunk_overlap=overlap)
+    chunked: list[Document] = []
+
+    for doc in docs:
+        article_meta = _base_article_metadata(doc)
+        if doc.metadata.get("article_scheme") == "duo":
+            chunked.append(enrich(doc, {**article_meta, "chunk_index": 0}))
+            continue
+
+        for index, text in enumerate(splitter.split_text(doc.page_content)):
+            if not text.strip():
                 continue
-            anchor = extract_anchor(chunk_text, page_num)
-            meta = ChunkMetadata(
-                doc_type=doc_type,
-                anchor_id=anchor.anchor_id,
-                anchor_type=anchor.anchor_type,
-                section_title=anchor.section_title,
-                source_url=source_url,
-                page=page_num,
-                start_page=page_num,
-                end_page=page_num,
-                title=title,
-                drive_file_id=drive_file_id,
+            chunked.append(
+                Document(
+                    page_content=text,
+                    metadata={**doc.metadata, **article_meta, "chunk_index": index},
+                )
             )
-            result.append((chunk_text, meta))
 
-    return result
+    return chunked
