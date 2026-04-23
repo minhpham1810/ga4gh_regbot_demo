@@ -61,10 +61,10 @@ def persist_to_chroma(
     chroma_dir: Path = CHROMA_DIR,
     collection_name: str = CORPUS_COLLECTION,
 ) -> None:
-    # TODO: wire up ChromaDB insertion using the existing retriever collection setup.
     print(
-        f"TODO: persist {len(documents)} documents to Chroma collection "
-        f"'{collection_name}' in '{chroma_dir}'."
+        "Chroma persistence is not implemented in this repository yet. "
+        f"Parsed {len(documents)} documents for collection '{collection_name}' in "
+        f"'{chroma_dir}'."
     )
 
 

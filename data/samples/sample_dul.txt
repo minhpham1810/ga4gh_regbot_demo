@@ -1,0 +1,9 @@
+Sample Data Use / Consent Language
+
+This project studies inherited cardiac disease. Access to the dataset will be limited to approved researchers working on disease-specific research questions.
+
+Researchers must obtain ethics approval from their home institution before accessing controlled data. Access requests will be reviewed by a data access committee.
+
+Approved users must sign a data use agreement and must not attempt to re-identify participants.
+
+The current draft does not explain whether participants may withdraw, whether secondary sharing outside the approved study is allowed, or how long data may be retained after the approved project period.

@@ -24,8 +24,8 @@ env/
 chroma_db/
 
 # Cached source artifacts (auto-populated during ingestion)
-data/ga4gh_corpus/raw/*
-!data/ga4gh_corpus/raw/.gitkeep
+data/raw/*
+!data/raw/.gitkeep
 
 # Pytest
 .pytest_cache/
@@ -55,3 +55,4 @@ Thumbs.db
 *.log
 
 .claude
+.superpowers

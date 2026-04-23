@@ -1,25 +1,34 @@
-"""
-End-to-end compliance analysis pipeline for a single turn.
+"""End-to-end pipeline for the Streamlit demo."""
 
-Two modes:
-  corpus_qa       - no uploaded document; conversational Q&A from corpus
-  document_review - uploaded document present; full compliance verdict analysis
-"""
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import fitz
 
 from config import TOP_K
 from generation.gap_detector import answer_corpus_question, detect_gaps
-from generation.router import judge_grounding, route_turn
+from generation.router import GroundingDecision, RouteDecision, judge_grounding, route_turn
 from generation.validator import VerdictItem, extract_cited_articles, validate_verdicts
 from retrieval.classifier import classify_domains
 from retrieval.retriever import RetrievedChunk, retrieve
 
+_NO_RETRIEVAL_MESSAGES = {
+    "corpus_qa": (
+        "I couldn't match that clearly to the GA4GH corpus. If you want, ask about a "
+        "GA4GH standard, a DUO term, consent language, or upload a document for review."
+    ),
+    "document_review": (
+        "No relevant GA4GH policy passages were found in the corpus. "
+        "Please index the corpus before running retrieval."
+    ),
+}
+
+
 @dataclass
 class PipelineResult:
+    """Structured output for one assistant turn."""
+
     chat_mode: str = "corpus_qa"
     domains: list[str] = field(default_factory=list)
     retrieved_chunks: list[RetrievedChunk] = field(default_factory=list)
@@ -29,11 +38,11 @@ class PipelineResult:
     answer: str = ""
     cited_chunks: list[RetrievedChunk] = field(default_factory=list)
     off_topic: bool = False
-    error: Optional[str] = None
+    error: str | None = None
     route_intent: str = "corpus_qa"
     route_confidence: str = "low"
     needs_clarification: bool = False
-    clarifying_question: Optional[str] = None
+    clarifying_question: str | None = None
 
     @property
     def is_document_review(self) -> bool:
@@ -48,16 +57,96 @@ class PipelineResult:
         return bool(self.verdicts)
 
     @property
-    def is_plain_response(self) -> bool:
-        return not self.error and not self.is_document_review and not self.has_grounded_sources
-
-    @property
     def can_open_context_rail(self) -> bool:
         return self.has_grounded_sources or self.has_review_findings
 
-    @property
-    def is_grounded_answer(self) -> bool:
-        return self.route_intent == "corpus_qa" and self.has_grounded_sources
+
+def _set_reply(result: PipelineResult, text: str) -> PipelineResult:
+    result.answer = text
+    result.narrative = text
+    return result
+
+
+def _apply_route_metadata(result: PipelineResult, route: RouteDecision) -> None:
+    result.route_intent = route.intent
+    result.route_confidence = route.confidence
+    result.needs_clarification = route.should_ask_clarifying_question
+    result.clarifying_question = route.clarifying_question
+
+
+def _early_route_result(route: RouteDecision) -> PipelineResult | None:
+    result = PipelineResult()
+    _apply_route_metadata(result, route)
+
+    if route.intent in {"small_talk", "off_topic_redirect"}:
+        result.off_topic = True
+        return _set_reply(result, route.reply or "")
+
+    if route.intent == "clarify":
+        return _set_reply(result, route.clarifying_question or "")
+
+    return None
+
+
+def _build_document_review(
+    result: PipelineResult,
+    researcher_text: str,
+    follow_up: str,
+    history: list[dict[str, Any]],
+) -> PipelineResult:
+    raw_output = detect_gaps(
+        researcher_text=researcher_text,
+        retrieved_chunks=result.retrieved_chunks,
+        follow_up=follow_up,
+        conversation_history=history,
+    )
+    retrieved_article_ids = {chunk.article_id for chunk in result.retrieved_chunks}
+    result.verdicts, result.flagged_articles, result.narrative = validate_verdicts(
+        raw_output,
+        retrieved_article_ids,
+    )
+    return result
+
+
+def _apply_grounding_result(
+    result: PipelineResult,
+    grounding: GroundingDecision,
+) -> PipelineResult | None:
+    result.route_confidence = grounding.confidence
+    if grounding.is_answerable:
+        return None
+
+    result.retrieved_chunks = []
+    if grounding.should_clarify:
+        result.route_intent = "clarify"
+        result.needs_clarification = True
+        result.clarifying_question = grounding.reply
+    else:
+        result.route_intent = "off_topic_redirect"
+        result.off_topic = True
+    return _set_reply(result, grounding.reply or "")
+
+
+def _build_corpus_answer(
+    result: PipelineResult,
+    query: str,
+    history: list[dict[str, Any]],
+) -> PipelineResult:
+    result.answer = answer_corpus_question(
+        query=query,
+        retrieved_chunks=result.retrieved_chunks,
+        conversation_history=history,
+    )
+    retrieved_article_ids = {chunk.article_id for chunk in result.retrieved_chunks}
+    cited_article_ids, result.flagged_articles = extract_cited_articles(
+        result.answer,
+        retrieved_article_ids,
+    )
+    cited_lookup = set(cited_article_ids)
+    result.cited_chunks = [
+        chunk for chunk in result.retrieved_chunks if chunk.article_id in cited_lookup
+    ]
+    return result
 
 
 def run_pipeline(
@@ -66,7 +155,6 @@ def run_pipeline(
     top_k: int = TOP_K,
     conversation_history: list[dict[str, Any]] | None = None,
 ) -> PipelineResult:
-    result = PipelineResult()
     history = conversation_history or []
     combined_query = f"{researcher_text}\n{follow_up}".strip()
     route = route_turn(
@@ -74,103 +162,44 @@ def run_pipeline(
         conversation_history=history,
         has_uploaded_doc=bool(researcher_text.strip()),
     )
-    result.route_intent = route.intent
-    result.route_confidence = route.confidence
-    result.needs_clarification = route.should_ask_clarifying_question
-    result.clarifying_question = route.clarifying_question
 
-    if route.intent in {"small_talk", "off_topic_redirect"}:
-        result.off_topic = True
-        result.answer = route.reply or ""
-        result.narrative = result.answer
-        return result
+    early_result = _early_route_result(route)
+    if early_result is not None:
+        return early_result
 
-    if route.intent == "clarify":
-        result.answer = route.clarifying_question or ""
-        result.narrative = result.answer
-        return result
+    result = PipelineResult(
+        chat_mode="document_review" if route.intent == "document_review" else "corpus_qa"
+    )
+    _apply_route_metadata(result, route)
 
     try:
-        result.chat_mode = "document_review" if route.intent == "document_review" else "corpus_qa"
         result.domains = classify_domains(combined_query)
-
         if route.should_retrieve:
             result.retrieved_chunks = retrieve(combined_query, top_k=top_k)
 
         if not result.retrieved_chunks:
-            if route.intent == "document_review":
-                msg = (
-                    "No relevant GA4GH policy passages were found in the corpus. "
-                    "Please index the corpus before running retrieval."
-                )
-            else:
-                msg = (
-                    "I couldn't match that clearly to the GA4GH corpus. "
-                    "If you want, ask about a GA4GH standard, a DUO term, consent language, "
-                    "or upload a document for review."
-                )
-            result.answer = msg
-            result.narrative = msg
-            return result
+            return _set_reply(result, _NO_RETRIEVAL_MESSAGES[result.chat_mode])
 
-        if route.intent == "document_review":
-            raw_output = detect_gaps(
-                researcher_text=researcher_text,
-                retrieved_chunks=result.retrieved_chunks,
-                follow_up=follow_up,
-                conversation_history=history,
-            )
-            retrieved_article_ids = {chunk.article_id for chunk in result.retrieved_chunks}
-            (
-                result.verdicts,
-                result.flagged_articles,
-                result.narrative,
-            ) = validate_verdicts(raw_output, retrieved_article_ids)
-        else:
-            grounding = judge_grounding(
-                query=follow_up.strip() or combined_query,
-                retrieved_chunks=result.retrieved_chunks,
-            )
-            result.route_confidence = grounding.confidence
-            if not grounding.is_answerable:
-                if grounding.should_clarify:
-                    result.route_intent = "clarify"
-                    result.needs_clarification = True
-                    result.clarifying_question = grounding.reply
-                    result.answer = grounding.reply or ""
-                    result.narrative = result.answer
-                else:
-                    result.route_intent = "off_topic_redirect"
-                    result.off_topic = True
-                    result.answer = grounding.reply or ""
-                    result.narrative = result.answer
-                result.retrieved_chunks = []
-                return result
+        if result.is_document_review:
+            return _build_document_review(result, researcher_text, follow_up, history)
 
-            query = follow_up.strip() or combined_query
-            result.answer = answer_corpus_question(
-                query=query,
-                retrieved_chunks=result.retrieved_chunks,
-                conversation_history=history,
-            )
-            retrieved_article_ids = {chunk.article_id for chunk in result.retrieved_chunks}
-            valid_cited, flagged = extract_cited_articles(result.answer, retrieved_article_ids)
-            result.flagged_articles = flagged
-            cited_ids = set(valid_cited)
-            result.cited_chunks = [
-                chunk for chunk in result.retrieved_chunks if chunk.article_id in cited_ids
-            ]
+        query = follow_up.strip() or combined_query
+        grounding = judge_grounding(query=query, retrieved_chunks=result.retrieved_chunks)
+        blocked_result = _apply_grounding_result(result, grounding)
+        if blocked_result is not None:
+            return blocked_result
+
+        return _build_corpus_answer(result, query, history)
 
     except Exception as exc:
         result.error = str(exc)
-        msg = (
-            f"Analysis encountered an error: {exc}\n\n"
-            "Please check that Ollama is running and the corpus has been indexed."
+        return _set_reply(
+            result,
+            (
+                f"Analysis encountered an error: {exc}\n\n"
+                "Please check that Ollama is running and the corpus has been indexed."
+            ),
         )
-        result.answer = msg
-        result.narrative = msg
-
-    return result
 
 
 def _read_local_document(doc_path: Path) -> str:

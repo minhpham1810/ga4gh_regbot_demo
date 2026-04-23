@@ -1,11 +1,9 @@
-"""
-GA4GH RegBot - Chat-first Streamlit UI.
-Run with: streamlit run ui/app.py
-"""
+"""Minimal Streamlit UI for the GA4GH-RegBot demo."""
+
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import fitz
 import streamlit as st
@@ -16,78 +14,81 @@ from generation.pipeline import PipelineResult, run_pipeline
 from generation.validator import VerdictItem
 from ui.pdf_viewer import get_cached_source_path, render_viewer
 
-st.set_page_config(
-    page_title="GA4GH RegBot",
-    layout="wide",
-)
+_PAGE_CSS = """
+<style>
+.block-container { padding-top: 1.5rem; padding-bottom: 7rem; max-width: 1400px; }
+[data-testid="stChatMessage"] { border-radius: 12px; margin-bottom: 0.5rem; }
+[data-testid="stChatInput"] {
+    max-width: min(980px, calc(100vw - 2rem));
+    margin-left: auto;
+    margin-right: auto;
+}
+[data-testid="stChatInput"] textarea { font-size: 1rem; }
+.badge-covered { background:#d4edda; color:#155724; padding:2px 8px; border-radius:4px; font-size:0.78rem; font-weight:600; }
+.badge-partial { background:#fff3cd; color:#856404; padding:2px 8px; border-radius:4px; font-size:0.78rem; font-weight:600; }
+.badge-missing { background:#f8d7da; color:#721c24; padding:2px 8px; border-radius:4px; font-size:0.78rem; font-weight:600; }
+.badge-unverified { background:#e2e3e5; color:#383d41; padding:2px 8px; border-radius:4px; font-size:0.78rem; font-weight:600; }
+</style>
+"""
+_STATE_DEFAULTS = {
+    "messages": [],
+    "uploaded_doc_text": "",
+    "uploaded_doc_name": "",
+    "source_preview_open": False,
+    "source_preview_mode": None,
+    "source_preview_selection": None,
+}
+_STATUS_CSS_CLASS = {
+    "covered": "badge-covered",
+    "partially covered": "badge-partial",
+    "missing": "badge-missing",
+    "unverified": "badge-unverified",
+}
+_DOMAIN_LABELS = {
+    "consent": "Consent",
+    "data_access": "Data Access",
+    "cross_border": "Cross-Border",
+    "privacy_security": "Privacy and Security",
+    "general": "General",
+}
 
-st.markdown(
-    """
-    <style>
-    .block-container { padding-top: 1.5rem; padding-bottom: 7rem; max-width: 1400px; }
-    [data-testid="stChatMessage"] { border-radius: 12px; margin-bottom: 0.5rem; }
-    [data-testid="stChatInput"] {
-        max-width: min(980px, calc(100vw - 2rem));
-        margin-left: auto;
-        margin-right: auto;
-    }
-    [data-testid="stChatInput"] textarea {
-        font-size: 1rem;
-    }
-    .badge-covered     { background:#d4edda; color:#155724; padding:2px 8px;
-                         border-radius:4px; font-size:0.78rem; font-weight:600; }
-    .badge-partial     { background:#fff3cd; color:#856404; padding:2px 8px;
-                         border-radius:4px; font-size:0.78rem; font-weight:600; }
-    .badge-missing     { background:#f8d7da; color:#721c24; padding:2px 8px;
-                         border-radius:4px; font-size:0.78rem; font-weight:600; }
-    .badge-unverified  { background:#e2e3e5; color:#383d41; padding:2px 8px;
-                         border-radius:4px; font-size:0.78rem; font-weight:600; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.set_page_config(page_title="GA4GH RegBot", layout="wide")
+st.markdown(_PAGE_CSS, unsafe_allow_html=True)
 
 
 def _init_state() -> None:
-    defaults = {
-        "messages": [],
-        "uploaded_doc_text": "",
-        "uploaded_doc_name": "",
-        "last_result": None,
-        "rail_open": False,
-        "rail_mode": None,
-        "rail_selection": None,
-        "rail_available": False,
-    }
-    for key, value in defaults.items():
+    for key, value in _STATE_DEFAULTS.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
 
+def _conversation_history() -> list[dict[str, str]]:
+    history: list[dict[str, str]] = []
+    for message in st.session_state.messages[-12:]:
+        content = message.get("content", "")
+        if message["role"] == "user" and "\n\n*(Document:" in content:
+            content = content.split("\n\n*(Document:")[0]
+        history.append({"role": message["role"], "content": content})
+    return history
+
+
 def _status_badge(status: str) -> str:
-    css_class = {
-        "covered": "badge-covered",
-        "partially covered": "badge-partial",
-        "missing": "badge-missing",
-        "unverified": "badge-unverified",
-    }.get(status.lower(), "badge-unverified")
+    css_class = _STATUS_CSS_CLASS.get(status.lower(), "badge-unverified")
     return f'<span class="{css_class}">{status}</span>'
 
 
 def _format_domains(domains: list[str]) -> str:
-    labels = {
-        "consent": "Consent",
-        "data_access": "Data Access",
-        "cross_border": "Cross-Border",
-        "privacy_security": "Privacy and Security",
-        "general": "General",
-    }
-    return " | ".join(labels.get(domain, domain) for domain in domains)
+    return " | ".join(_DOMAIN_LABELS.get(domain, domain) for domain in domains)
+
+
+def _page_label(page: int | None) -> str:
+    return f"p.{page}" if page is not None else "no page"
 
 
 def _verdict_summary_text(verdicts: list[VerdictItem]) -> str:
     if not verdicts:
         return ""
+
     counts = {"covered": 0, "partially covered": 0, "missing": 0, "unverified": 0}
     for verdict in verdicts:
         counts[verdict.status.lower()] = counts.get(verdict.status.lower(), 0) + 1
@@ -104,58 +105,32 @@ def _verdict_summary_text(verdicts: list[VerdictItem]) -> str:
     return " | ".join(parts)
 
 
-def _get_history() -> list[dict[str, str]]:
-    history: list[dict[str, str]] = []
-    for msg in st.session_state.messages[-12:]:
-        role = msg["role"]
-        content = msg.get("content", "")
-        if role == "user" and "\n\n*(Document:" in content:
-            content = content.split("\n\n*(Document:")[0]
-        history.append({"role": role, "content": content})
-    return history
-
-
-def _page_label(page: int | None) -> str:
-    return f"p.{page}" if page is not None else "no page"
-
-
-def _unique_cited_chunks(chunks: list) -> list:
-    unique_chunks: list = []
+def _unique_cited_chunks(chunks: list[Any]) -> list[Any]:
+    unique_chunks: list[Any] = []
     seen: set[tuple[str, str, int | None]] = set()
-
     for chunk in chunks:
         key = (chunk.source_id, chunk.article_id, chunk.page)
         if key in seen:
             continue
         seen.add(key)
         unique_chunks.append(chunk)
-
     return unique_chunks
 
 
-def _set_rail_available(available: bool) -> None:
-    st.session_state.rail_available = available
-    if not available and not st.session_state.rail_open:
-        st.session_state.rail_mode = None
-        st.session_state.rail_selection = None
+def _open_source_preview(mode: str, selection: dict[str, Any]) -> None:
+    st.session_state.source_preview_open = True
+    st.session_state.source_preview_mode = mode
+    st.session_state.source_preview_selection = selection
 
 
-def _open_context_rail(mode: str, selection: dict[str, Any]) -> None:
-    st.session_state.rail_open = True
-    st.session_state.rail_mode = mode
-    st.session_state.rail_selection = selection
-    _set_rail_available(True)
+def _close_source_preview() -> None:
+    st.session_state.source_preview_open = False
+    st.session_state.source_preview_mode = None
+    st.session_state.source_preview_selection = None
 
 
-def _close_context_rail() -> None:
-    st.session_state.rail_open = False
-    st.session_state.rail_mode = None
-    st.session_state.rail_selection = None
-
-
-def _rail_selection_from_chunk(chunk) -> dict[str, Any]:
+def _selection_from_chunk(chunk: Any) -> dict[str, Any]:
     return {
-        "kind": "source",
         "source_title": chunk.source_title,
         "page": chunk.page,
         "article_id": chunk.article_id,
@@ -164,9 +139,8 @@ def _rail_selection_from_chunk(chunk) -> dict[str, Any]:
     }
 
 
-def _rail_selection_from_verdict(verdict: VerdictItem, result: PipelineResult) -> dict[str, Any]:
+def _selection_from_verdict(verdict: VerdictItem, result: PipelineResult) -> dict[str, Any]:
     selection = {
-        "kind": "source",
         "source_title": verdict.source_title,
         "page": verdict.page,
         "article_id": verdict.article_id,
@@ -176,23 +150,21 @@ def _rail_selection_from_verdict(verdict: VerdictItem, result: PipelineResult) -
     for chunk in result.retrieved_chunks:
         if chunk.article_id != verdict.article_id:
             continue
-        selection["source_url"] = chunk.source_url
+        selection["source_title"] = selection["source_title"] or chunk.source_title
+        selection["page"] = selection["page"] if selection["page"] is not None else chunk.page
         selection["source_id"] = chunk.source_id
-        if selection["page"] is None:
-            selection["page"] = chunk.page
-        if not selection["source_title"]:
-            selection["source_title"] = chunk.source_title
+        selection["source_url"] = chunk.source_url
         break
     return selection
 
 
-def _extract_uploaded_text(uploaded_file) -> str:
+def _extract_uploaded_text(uploaded_file: Any) -> str:
     suffix = Path(uploaded_file.name).suffix.lower()
     if suffix == ".pdf":
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(uploaded_file.getvalue())
-            tmp_path = Path(tmp.name)
-        pdf = fitz.open(str(tmp_path))
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
+            temp_file.write(uploaded_file.getvalue())
+            temp_path = Path(temp_file.name)
+        pdf = fitz.open(str(temp_path))
         try:
             return "\n\n".join(
                 page.get_text("text").strip()
@@ -201,28 +173,26 @@ def _extract_uploaded_text(uploaded_file) -> str:
             )
         finally:
             pdf.close()
-            tmp_path.unlink(missing_ok=True)
+            temp_path.unlink(missing_ok=True)
     return uploaded_file.getvalue().decode("utf-8", errors="replace")
 
 
-def _attach_uploaded_document(uploaded_file) -> bool:
+def _attach_uploaded_document(uploaded_file: Any) -> bool:
     if uploaded_file is None:
         return False
 
-    doc_text = _extract_uploaded_text(uploaded_file)
-    if doc_text == st.session_state.uploaded_doc_text:
+    document_text = _extract_uploaded_text(uploaded_file)
+    if document_text == st.session_state.uploaded_doc_text:
         return False
 
-    st.session_state.uploaded_doc_text = doc_text
+    st.session_state.uploaded_doc_text = document_text
     st.session_state.uploaded_doc_name = uploaded_file.name
     st.session_state.messages.append(
         {
             "role": "assistant",
             "content": (
-                f"I've loaded **{uploaded_file.name}**. I can analyze it for consent, "
-                "data-sharing, privacy/security, or cross-border transfer issues. "
-                "Try asking *'What are the biggest gaps?'* or "
-                "*'Does this address secondary use?'*"
+                f"I've loaded **{uploaded_file.name}**. I can review it against the GA4GH "
+                "corpus for consent, data-sharing, privacy/security, or cross-border issues."
             ),
             "meta": {},
         }
@@ -230,12 +200,10 @@ def _attach_uploaded_document(uploaded_file) -> bool:
     return True
 
 
-def _push_message(prompt: str, uploaded_file=None) -> None:
-    attached = _attach_uploaded_document(uploaded_file)
+def _submit_turn(prompt: str, uploaded_file: Any = None) -> None:
+    _attach_uploaded_document(uploaded_file)
     prompt = prompt.strip()
     if not prompt:
-        if attached:
-            return
         return
 
     user_content = prompt
@@ -247,36 +215,31 @@ def _push_message(prompt: str, uploaded_file=None) -> None:
         result = run_pipeline(
             researcher_text=st.session_state.uploaded_doc_text,
             follow_up=prompt,
-            conversation_history=_get_history(),
+            conversation_history=_conversation_history(),
         )
 
     reply = result.answer or result.narrative or ""
-    st.session_state.last_result = result
-    _set_rail_available(result.can_open_context_rail)
-
     st.session_state.messages.append(
         {"role": "assistant", "content": reply, "meta": {"result": result}}
     )
 
 
-def _render_source_panel(selection: dict[str, Any]) -> None:
-    source_title = selection.get("source_title", "")
-    article_id = selection.get("article_id", "")
-    page = selection.get("page")
-
+def _render_source_preview(selection: dict[str, Any]) -> None:
     header_col, close_col = st.columns([5, 1])
     with header_col:
         st.markdown("### Source Preview")
     with close_col:
-        if st.button("Close", key="close_context_rail", use_container_width=True):
-            _close_context_rail()
+        if st.button("Close", key="close_source_preview", use_container_width=True):
+            _close_source_preview()
             st.rerun()
 
-    st.markdown(f"**{source_title}**")
-    if page is not None:
-        st.markdown(f"Article: `{article_id}`  |  Page: **{page}**")
-    else:
+    st.markdown(f"**{selection.get('source_title', '')}**")
+    page = selection.get("page")
+    article_id = selection.get("article_id", "")
+    if page is None:
         st.markdown(f"Article: `{article_id}`")
+    else:
+        st.markdown(f"Article: `{article_id}` | Page: **{page}**")
 
     source_path = get_cached_source_path(selection.get("source_id", ""))
     if source_path:
@@ -288,130 +251,110 @@ def _render_source_panel(selection: dict[str, Any]) -> None:
         st.markdown(f"[Open original source]({selection['source_url']})")
 
 
-def _render_context_rail() -> None:
-    selection = st.session_state.rail_selection
-    if not selection:
-        return
-
-    with st.container(border=True):
-        mode = st.session_state.rail_mode
-        if mode in {"source", "review_detail"}:
-            _render_source_panel(selection)
-        else:
-            st.info("No context selected.")
-
-
-def _render_grounded_sources(result: PipelineResult, live: bool) -> None:
+def _render_grounded_sources(result: PipelineResult, expanded: bool) -> None:
     if not result.has_grounded_sources:
         return
 
     display_chunks = _unique_cited_chunks(result.cited_chunks)
-    with st.expander(f"Sources ({len(display_chunks)})", expanded=live):
+    with st.expander(f"Sources ({len(display_chunks)})", expanded=expanded):
         if result.flagged_articles:
             st.warning(f"Unverified citation(s): `{'`, `'.join(result.flagged_articles)}`")
+
         for index, chunk in enumerate(display_chunks):
             label = chunk.section_title or chunk.article_id
             st.markdown(
                 f"**{label}** - `{chunk.article_id}` | {_page_label(chunk.page)} | "
                 f"*{chunk.source_title}*"
             )
-            columns = st.columns([5, 1])
-            with columns[1]:
+            _, button_col = st.columns([5, 1])
+            with button_col:
                 if st.button(
                     "View Source",
-                    key=(
-                        f"qa_src_{index}_{chunk.source_id}_{chunk.article_id}_"
-                        f"{chunk.page}_{id(result)}"
-                    ),
+                    key=f"qa_source_{index}_{chunk.source_id}_{chunk.article_id}_{chunk.page}",
                     use_container_width=True,
                 ):
-                    _open_context_rail("source", _rail_selection_from_chunk(chunk))
+                    _open_source_preview("source", _selection_from_chunk(chunk))
             st.divider()
 
 
-def _render_corpus_qa(result: PipelineResult, live: bool = False) -> str:
-    reply = result.answer or result.narrative or "No answer was produced."
-    st.markdown(reply)
-    _render_grounded_sources(result, live=live)
-    return reply
+def _render_corpus_answer(result: PipelineResult) -> None:
+    st.markdown(result.answer or result.narrative or "No answer was produced.")
+    _render_grounded_sources(result, expanded=False)
 
 
-def _render_document_review(result: PipelineResult, live: bool = False) -> str:
-    n_issues = sum(
-        1
+def _render_document_review(result: PipelineResult) -> None:
+    total = len(result.verdicts)
+    covered = sum(verdict.status.lower() == "covered" for verdict in result.verdicts)
+    needs_attention = sum(
+        verdict.status.lower() in {"missing", "partially covered"}
         for verdict in result.verdicts
-        if verdict.status.lower() in {"missing", "partially covered"}
     )
-    n_covered = sum(1 for verdict in result.verdicts if verdict.status.lower() == "covered")
-    domains_str = _format_domains(result.domains)
 
     if result.verdicts:
-        reply = (
+        summary = (
             "I've analysed the document against the GA4GH corpus "
-            f"across the **{domains_str}** domain(s).\n\n"
-            f"Out of **{len(result.verdicts)}** obligations checked: "
-            f"**{n_covered}** covered, **{n_issues}** need attention."
+            f"across the **{_format_domains(result.domains)}** domain(s).\n\n"
+            f"Out of **{total}** obligations checked: **{covered}** covered, "
+            f"**{needs_attention}** need attention."
         )
         if result.flagged_articles:
-            reply += (
+            summary += (
                 f"\n\n**{len(result.flagged_articles)}** citation(s) could not be verified "
                 "and were marked as *unverified*."
             )
     else:
-        reply = (
-            f"I analysed the document in the **{domains_str}** domain(s), "
+        summary = (
+            f"I analysed the document in the **{_format_domains(result.domains)}** domain(s), "
             "but no structured verdicts were produced. See the narrative below."
         )
 
-    st.markdown(reply)
+    st.markdown(summary)
 
     if result.domains:
-        columns = st.columns([3, 2])
-        with columns[0]:
+        left_col, right_col = st.columns([3, 2])
+        with left_col:
             st.caption(f"Domains: {_format_domains(result.domains)}")
-        with columns[1]:
+        with right_col:
             st.caption(_verdict_summary_text(result.verdicts))
 
     if result.narrative:
         with st.expander("Detailed analysis", expanded=False):
             st.markdown(result.narrative)
 
-    if result.verdicts:
-        with st.expander(f"Evidence and citations ({len(result.verdicts)} items)", expanded=live):
-            if result.flagged_articles:
-                st.warning(f"Unverified: `{'`, `'.join(result.flagged_articles)}`")
-            for index, verdict in enumerate(result.verdicts):
-                badge_html = _status_badge(verdict.status)
-                st.markdown(
-                    f"{badge_html} &nbsp; **{verdict.section_title or verdict.article_id}** "
-                    f"- `{verdict.article_id}`",
-                    unsafe_allow_html=True,
-                )
-                if verdict.obligation:
-                    st.markdown(f"*Obligation:* {verdict.obligation}")
-                if verdict.evidence:
-                    clipped = verdict.evidence[:300]
-                    suffix = "..." if len(verdict.evidence) > 300 else ""
-                    st.markdown(f"> {clipped}{suffix}")
-                if verdict.rationale:
-                    st.caption(verdict.rationale)
-                columns = st.columns([4, 1])
-                with columns[1]:
-                    if st.button(
-                        "View Source",
-                        key=f"dr_src_{index}_{verdict.article_id}_{verdict.page}_{id(result)}",
-                        use_container_width=True,
-                    ):
-                        _open_context_rail(
-                            "review_detail",
-                            _rail_selection_from_verdict(verdict, result),
-                        )
-                st.divider()
+    if not result.verdicts:
+        return
 
-    return reply
+    with st.expander(f"Evidence and citations ({len(result.verdicts)} items)", expanded=False):
+        if result.flagged_articles:
+            st.warning(f"Unverified: `{'`, `'.join(result.flagged_articles)}`")
+
+        for index, verdict in enumerate(result.verdicts):
+            st.markdown(
+                f"{_status_badge(verdict.status)} &nbsp; "
+                f"**{verdict.section_title or verdict.article_id}** - `{verdict.article_id}`",
+                unsafe_allow_html=True,
+            )
+            if verdict.obligation:
+                st.markdown(f"*Obligation:* {verdict.obligation}")
+            if verdict.evidence:
+                clipped = verdict.evidence[:300]
+                suffix = "..." if len(verdict.evidence) > 300 else ""
+                st.markdown(f"> {clipped}{suffix}")
+            if verdict.rationale:
+                st.caption(verdict.rationale)
+
+            _, button_col = st.columns([4, 1])
+            with button_col:
+                if st.button(
+                    "View Source",
+                    key=f"review_source_{index}_{verdict.article_id}_{verdict.page}",
+                    use_container_width=True,
+                ):
+                    _open_source_preview("review_detail", _selection_from_verdict(verdict, result))
+            st.divider()
 
 
-def _render_result(result: PipelineResult, live: bool = False) -> str:
+def _render_result(result: PipelineResult) -> None:
     route_intent = getattr(result, "route_intent", "")
     off_topic = getattr(result, "off_topic", False)
     is_document_review = getattr(
@@ -421,44 +364,33 @@ def _render_result(result: PipelineResult, live: bool = False) -> str:
     )
 
     if result.error:
-        reply = result.answer or result.narrative
-        st.markdown(reply)
-        return reply
+        st.markdown(result.answer or result.narrative)
+        return
     if route_intent in {"small_talk", "off_topic_redirect", "clarify"} or off_topic:
-        reply = result.answer or result.narrative
-        st.markdown(reply)
-        return reply
-    if not result.retrieved_chunks and not result.answer:
-        reply = (
-            "I couldn't find any relevant GA4GH policy passages. "
-            "Please index the corpus first."
-        )
-        st.markdown(reply)
-        return reply
+        st.markdown(result.answer or result.narrative)
+        return
     if is_document_review:
-        return _render_document_review(result, live=live)
-    return _render_corpus_qa(result, live=live)
+        _render_document_review(result)
+        return
+    _render_corpus_answer(result)
 
 
 def _render_message(message: dict[str, Any]) -> None:
-    role = message["role"]
-    with st.chat_message(role):
-        if role == "user":
+    with st.chat_message(message["role"]):
+        if message["role"] == "user":
             st.markdown(message["content"])
             return
 
-        result: Optional[PipelineResult] = message.get("meta", {}).get("result")
+        result = message.get("meta", {}).get("result")
         if result:
-            _render_result(result, live=False)
+            _render_result(result)
         else:
             st.markdown(message.get("content", ""))
 
 
-def _render_chat_header() -> None:
+def _render_header() -> None:
     st.markdown("## GA4GH RegBot")
-    st.caption(
-        "Evidence-backed GA4GH guidance for standards questions and document review."
-    )
+    st.caption("Evidence-backed GA4GH guidance for standards questions and document review.")
 
 
 def _render_chat_history() -> None:
@@ -476,34 +408,38 @@ def _render_chat_input() -> None:
         return
 
     if isinstance(chat_value, str):
-        _push_message(chat_value)
+        _submit_turn(chat_value)
         st.rerun()
         return
 
     uploaded_file = chat_value.files[0] if chat_value.files else None
-    _push_message(chat_value.text, uploaded_file=uploaded_file)
+    _submit_turn(chat_value.text, uploaded_file=uploaded_file)
     st.rerun()
 
 
-def _render_chat_workspace() -> None:
-    _render_chat_header()
+def _render_workspace() -> None:
+    _render_header()
     _render_chat_history()
 
 
 _init_state()
 
-has_rail = st.session_state.rail_open and st.session_state.rail_selection is not None
-if has_rail:
+preview_open = (
+    st.session_state.source_preview_open
+    and st.session_state.source_preview_selection is not None
+)
+if preview_open:
     chat_col, preview_col = st.columns([2, 1.1], gap="large")
 else:
     chat_col = st.container()
     preview_col = None
 
 with chat_col:
-    _render_chat_workspace()
+    _render_workspace()
 
 if preview_col is not None:
     with preview_col:
-        _render_context_rail()
+        with st.container(border=True):
+            _render_source_preview(st.session_state.source_preview_selection)
 
 _render_chat_input()
