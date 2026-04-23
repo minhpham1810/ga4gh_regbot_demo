@@ -13,51 +13,10 @@ import fitz
 
 from config import TOP_K
 from generation.gap_detector import answer_corpus_question, detect_gaps
+from generation.router import judge_grounding, route_turn
 from generation.validator import VerdictItem, extract_cited_articles, validate_verdicts
 from retrieval.classifier import classify_domains
 from retrieval.retriever import RetrievedChunk, retrieve
-
-_OFF_TOPIC_SIGNALS = [
-    "weather",
-    "stock price",
-    "stock market",
-    "recipe",
-    "sports",
-    "joke",
-    "movie",
-    "translate this",
-    "who is the president",
-    "capital of",
-    "how to cook",
-]
-
-_COMPLIANCE_SIGNALS = [
-    "consent",
-    "data",
-    "compliance",
-    "access",
-    "privacy",
-    "gdpr",
-    "research",
-    "ethics",
-    "genomic",
-    "sharing",
-    "duo",
-    "dul",
-    "ga4gh",
-    "framework",
-    "policy",
-    "clause",
-    "agreement",
-]
-
-
-def _is_off_topic(text: str) -> bool:
-    lower = text.lower()
-    has_off_topic = any(signal in lower for signal in _OFF_TOPIC_SIGNALS)
-    has_compliance = any(signal in lower for signal in _COMPLIANCE_SIGNALS)
-    return has_off_topic and not has_compliance
-
 
 @dataclass
 class PipelineResult:
@@ -71,13 +30,34 @@ class PipelineResult:
     cited_chunks: list[RetrievedChunk] = field(default_factory=list)
     off_topic: bool = False
     error: Optional[str] = None
+    route_intent: str = "corpus_qa"
+    route_confidence: str = "low"
+    needs_clarification: bool = False
+    clarifying_question: Optional[str] = None
 
+    @property
+    def is_document_review(self) -> bool:
+        return self.chat_mode == "document_review"
 
-_OFF_TOPIC_RESPONSE = (
-    "I'm a GA4GH compliance assistant. I can answer questions about GA4GH "
-    "standards, DUO terms, consent language, and data sharing obligations - "
-    "or you can upload a document for a full compliance review."
-)
+    @property
+    def has_grounded_sources(self) -> bool:
+        return bool(self.cited_chunks)
+
+    @property
+    def has_review_findings(self) -> bool:
+        return bool(self.verdicts)
+
+    @property
+    def is_plain_response(self) -> bool:
+        return not self.error and not self.is_document_review and not self.has_grounded_sources
+
+    @property
+    def can_open_context_rail(self) -> bool:
+        return self.has_grounded_sources or self.has_review_findings
+
+    @property
+    def is_grounded_answer(self) -> bool:
+        return self.route_intent == "corpus_qa" and self.has_grounded_sources
 
 
 def run_pipeline(
@@ -89,34 +69,51 @@ def run_pipeline(
     result = PipelineResult()
     history = conversation_history or []
     combined_query = f"{researcher_text}\n{follow_up}".strip()
+    route = route_turn(
+        user_text=follow_up.strip() or combined_query,
+        conversation_history=history,
+        has_uploaded_doc=bool(researcher_text.strip()),
+    )
+    result.route_intent = route.intent
+    result.route_confidence = route.confidence
+    result.needs_clarification = route.should_ask_clarifying_question
+    result.clarifying_question = route.clarifying_question
 
-    if not combined_query:
+    if route.intent in {"small_talk", "off_topic_redirect"}:
         result.off_topic = True
-        result.answer = _OFF_TOPIC_RESPONSE
-        result.narrative = _OFF_TOPIC_RESPONSE
+        result.answer = route.reply or ""
+        result.narrative = result.answer
         return result
 
-    if _is_off_topic(combined_query):
-        result.off_topic = True
-        result.answer = _OFF_TOPIC_RESPONSE
-        result.narrative = _OFF_TOPIC_RESPONSE
+    if route.intent == "clarify":
+        result.answer = route.clarifying_question or ""
+        result.narrative = result.answer
         return result
 
     try:
+        result.chat_mode = "document_review" if route.intent == "document_review" else "corpus_qa"
         result.domains = classify_domains(combined_query)
-        result.retrieved_chunks = retrieve(combined_query, top_k=top_k)
+
+        if route.should_retrieve:
+            result.retrieved_chunks = retrieve(combined_query, top_k=top_k)
 
         if not result.retrieved_chunks:
-            msg = (
-                "No relevant GA4GH policy passages were found in the corpus. "
-                "Please index the corpus before running retrieval."
-            )
+            if route.intent == "document_review":
+                msg = (
+                    "No relevant GA4GH policy passages were found in the corpus. "
+                    "Please index the corpus before running retrieval."
+                )
+            else:
+                msg = (
+                    "I couldn't match that clearly to the GA4GH corpus. "
+                    "If you want, ask about a GA4GH standard, a DUO term, consent language, "
+                    "or upload a document for review."
+                )
             result.answer = msg
             result.narrative = msg
             return result
 
-        if researcher_text.strip():
-            result.chat_mode = "document_review"
+        if route.intent == "document_review":
             raw_output = detect_gaps(
                 researcher_text=researcher_text,
                 retrieved_chunks=result.retrieved_chunks,
@@ -130,7 +127,26 @@ def run_pipeline(
                 result.narrative,
             ) = validate_verdicts(raw_output, retrieved_article_ids)
         else:
-            result.chat_mode = "corpus_qa"
+            grounding = judge_grounding(
+                query=follow_up.strip() or combined_query,
+                retrieved_chunks=result.retrieved_chunks,
+            )
+            result.route_confidence = grounding.confidence
+            if not grounding.is_answerable:
+                if grounding.should_clarify:
+                    result.route_intent = "clarify"
+                    result.needs_clarification = True
+                    result.clarifying_question = grounding.reply
+                    result.answer = grounding.reply or ""
+                    result.narrative = result.answer
+                else:
+                    result.route_intent = "off_topic_redirect"
+                    result.off_topic = True
+                    result.answer = grounding.reply or ""
+                    result.narrative = result.answer
+                result.retrieved_chunks = []
+                return result
+
             query = follow_up.strip() or combined_query
             result.answer = answer_corpus_question(
                 query=query,
@@ -144,8 +160,6 @@ def run_pipeline(
             result.cited_chunks = [
                 chunk for chunk in result.retrieved_chunks if chunk.article_id in cited_ids
             ]
-            if not result.cited_chunks:
-                result.cited_chunks = result.retrieved_chunks
 
     except Exception as exc:
         result.error = str(exc)

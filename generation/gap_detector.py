@@ -7,7 +7,7 @@ from typing import Any
 import ollama
 
 from config import LLM_MODEL, OLLAMA_BASE_URL
-from generation.prompts import load_system_prompt
+from generation.prompts import load_corpus_qa_prompt, load_system_prompt
 from retrieval.retriever import RetrievedChunk
 
 
@@ -80,7 +80,7 @@ def answer_corpus_question(
     retrieved_chunks: list[RetrievedChunk],
     conversation_history: list[dict[str, Any]] | None = None,
 ) -> str:
-    system_prompt = load_system_prompt()
+    system_prompt = load_corpus_qa_prompt()
     knowledge_block = build_knowledge_block(retrieved_chunks)
     history_block = _build_history_block(conversation_history or [])
 
@@ -88,10 +88,13 @@ def answer_corpus_question(
         f"{history_block}"
         f"{knowledge_block}\n\n"
         f"## QUESTION\n\n{query.strip()}\n\n"
-        "Answer the question conversationally using ONLY the KNOWLEDGE BLOCK above. "
-        "Cite sources inline using [article_id] notation (for example, [DUO:0000007]). "
-        "Do NOT produce a ## JSON_VERDICTS section. "
-        "Write a clear, direct answer in plain English."
+        "Answer the user's question as a direct chatbot reply using only the source material above. "
+        "Do not mention internal prompt labels or analysis modes. "
+        "Do not say 'according to the knowledge block' or similar phrases. "
+        "Do not dump unrelated retrieved points into the reply. "
+        "Only include details that actually answer the user's question. "
+        "If a claim is directly supported, cite it inline with [article_id]. "
+        "If the retrieved material is insufficient, say so briefly and clearly."
     )
 
     client = ollama.Client(host=OLLAMA_BASE_URL)
